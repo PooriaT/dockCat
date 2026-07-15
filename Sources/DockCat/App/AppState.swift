@@ -132,7 +132,7 @@ final class AppState: ObservableObject {
     private func updateState() { catState = machine.state; logger.debug("Cat state: \(self.catState.rawValue, privacy: .public)") }
     private func reposition() {
         let geometry = locator.locate(preferences: settings.preferences)
-        catWindow.position(at: geometry.sleepingPoint, presentationPoint: geometry.presentationPoint)
+        catWindow.position(at: geometry.sleepingPoint, presentationPoint: geometry.presentationPoint, dockEdge: geometry.edge)
         cardWindow.position(above: geometry.presentationPoint, offset: settings.preferences.cardOffset)
     }
 }

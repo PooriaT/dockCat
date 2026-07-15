@@ -70,6 +70,14 @@ final class CatScene: SKScene {
         }
     }
 
+    func runAsync(_ animation: CatAnimation, duration: TimeInterval, reducedMotion: Bool) async {
+        await withCheckedContinuation { continuation in
+            run(animation, duration: duration, reducedMotion: reducedMotion) {
+                continuation.resume()
+            }
+        }
+    }
+
     func playLoop() {
         cat.removeAllActions()
         cat.setScale(1)
