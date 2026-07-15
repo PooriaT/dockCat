@@ -13,6 +13,7 @@ final class CatWindowController {
     private var sleepingPoint = CGPoint.zero
     private var presentationPoint = CGPoint.zero
     private var dockEdge: DockEdge = .bottom
+    private var isMotionPaused = false
     private lazy var motionDriver = CatMotionDriver(updater: panel)
 
     private enum AnchorOffset {
@@ -22,6 +23,17 @@ final class CatWindowController {
 
     private static func panelOrigin(forVisualAnchor anchor: CGPoint) -> CGPoint {
         CGPoint(x: anchor.x - AnchorOffset.x, y: anchor.y - AnchorOffset.y)
+    }
+
+    private func targetOrigin(for animation: CatAnimation) -> CGPoint? {
+        switch animation {
+        case .walkToPresentation:
+            Self.panelOrigin(forVisualAnchor: presentationPoint)
+        case .walkHome:
+            Self.panelOrigin(forVisualAnchor: sleepingPoint)
+        default:
+            nil
+        }
     }
 
     init() {
@@ -37,17 +49,27 @@ final class CatWindowController {
     }
     func showSleeping() { panel.orderFrontRegardless(); scene.playLoop() }
     func animate(_ animation: CatAnimation, speed: Double, reducedMotion: Bool) async {
-        let target = animation == .walkToPresentation ? presentationPoint : (animation == .walkHome ? sleepingPoint : nil)
-        if let target {
-            let targetOrigin = Self.panelOrigin(forVisualAnchor: target)
+        if let targetOrigin = targetOrigin(for: animation) {
             let plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(targetOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
             async let sceneResult: Void = scene.runAsync(animation, duration: plan.duration, reducedMotion: reducedMotion)
             async let motionResult = motionDriver.move(to: targetOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
-            _ = await (sceneResult, motionResult)
+            let (_, result) = await (sceneResult, motionResult)
+            await finishWalkIfNeeded(animation, after: result, speed: speed, reducedMotion: reducedMotion)
         } else {
             await scene.runAsync(animation, duration: CatMotionTiming.minimumDuration / max(CatMotionTiming.minimumSpeed, min(speed, CatMotionTiming.maximumSpeed)), reducedMotion: reducedMotion)
         }
     }
-    func pause() { motionDriver.cancelActiveMotion(); scene.isPaused = true }
-    func resume() { scene.isPaused = false }
+
+    private func finishWalkIfNeeded(_ animation: CatAnimation, after result: CatMotionCompletion, speed: Double, reducedMotion: Bool) async {
+        var result = result
+        while result == .cancelled, !Task.isCancelled {
+            while isMotionPaused, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard !Task.isCancelled, let currentTargetOrigin = targetOrigin(for: animation) else { return }
+            result = await motionDriver.move(to: currentTargetOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
+        }
+    }
+    func pause() { isMotionPaused = true; motionDriver.cancelActiveMotion(); scene.isPaused = true }
+    func resume() { isMotionPaused = false; scene.isPaused = false }
 }
