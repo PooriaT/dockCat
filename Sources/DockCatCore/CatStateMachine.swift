@@ -2,12 +2,12 @@ import Foundation
 
 public enum CatState: String, Equatable, Sendable {
     case sleeping, waking, pickingUpCard, walkingToPresentation, presenting
-    case waitingForDismissal, preparingNextNotification, walkingHome, settlingDown, paused
+    case waitingForDismissal, preparingNextNotification, dismissingCard, walkingHome, settlingDown, paused
 }
 
 public enum CatEvent: Equatable, Sendable {
     case notificationAvailable, animationCompleted, cardPresented
-    case transientExpired, userDismissed, nextNotificationAvailable, queueEmpty
+    case transientExpired, userDismissed, nextNotificationAvailable, queueEmpty, cardDismissed
     case pause, resume
 }
 
@@ -33,7 +33,8 @@ public struct CatStateMachine: Sendable {
         case (.presenting, .cardPresented): next = .waitingForDismissal
         case (.waitingForDismissal, .transientExpired), (.waitingForDismissal, .userDismissed): next = .preparingNextNotification
         case (.preparingNextNotification, .nextNotificationAvailable): next = .presenting
-        case (.preparingNextNotification, .queueEmpty): next = .walkingHome
+        case (.preparingNextNotification, .queueEmpty): next = .dismissingCard
+        case (.dismissingCard, .cardDismissed): next = .walkingHome
         case (.walkingHome, .animationCompleted): next = .settlingDown
         case (.settlingDown, .animationCompleted): next = .sleeping
         default: next = nil

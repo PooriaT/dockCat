@@ -80,6 +80,17 @@ final class CatWindowController {
             await scene.runAsync(.stopAtPresentation(stop), duration: 0.15, reducedMotion: reducedMotion)
         }
     }
+
+    func showCarriedCard() { scene.showCarriedMiniCard() }
+    func hideCarriedCard() { scene.hideCarriedMiniCard() }
+    func prepareHandoffPose() { scene.prepareHandoffPose() }
+    func completeHandoffPose() { scene.completeHandoffPose() }
+
+    func handoffSourceRect() -> CGRect {
+        let origin = panel.frame.origin
+        let center = CGPoint(x: origin.x + AnchorOffset.x + 42, y: origin.y + AnchorOffset.y + 38)
+        return CGRect(x: center.x - 18, y: center.y - 12, width: 36, height: 24)
+    }
     func pause() { isMotionPaused = true; motionDriver.cancelActiveMotion(); scene.isPaused = true }
     func resume() { isMotionPaused = false; scene.isPaused = false }
 }

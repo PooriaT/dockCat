@@ -145,6 +145,11 @@ final class CatScene: SKScene {
     }
 
     private func stopBreathing() { cat.removeAction(forKey: ActionKey.breathing); cat.setScale(1) }
+    func showCarriedMiniCard() { showMiniCard() }
+    func hideCarriedMiniCard() { hideMiniCard() }
+    func prepareHandoffPose() { stopWalkLoop(); setStoppedPose(carrying: true) }
+    func completeHandoffPose() { setStoppedPose(carrying: false) }
+
     private func showMiniCard() { card.isHidden = false; card.alpha = 1 }
     private func hideMiniCard() { card.removeAction(forKey: ActionKey.cardPickup); card.isHidden = true; card.alpha = 0 }
 
