@@ -82,8 +82,14 @@ final class CatScene: SKScene {
             card.run(.sequence([.fadeIn(withDuration: d), .run { completion() }]), withKey: ActionKey.cardPickup)
         case .turnToPresentation(let context), .turnHome(let context):
             stopBreathing()
-            applyFacing(context.facing, animated: !reducedMotion, duration: d)
-            cat.run(.sequence([.wait(forDuration: d), .run { completion() }]), withKey: ActionKey.turn)
+            let transform = facingTransform(for: context.facing)
+            cat.xScale = transform.xScale
+            if reducedMotion {
+                cat.zRotation = transform.rotation
+                cat.run(.sequence([.wait(forDuration: d), .run { completion() }]), withKey: ActionKey.turn)
+            } else {
+                cat.run(.sequence([.rotate(toAngle: transform.rotation, duration: d, shortestUnitArc: true), .run { completion() }]), withKey: ActionKey.turn)
+            }
         case .walkToPresentationLoop(let context), .walkHomeLoop(let context):
             stopBreathing()
             applyFacing(context.facing, animated: false, duration: 0)
@@ -143,17 +149,19 @@ final class CatScene: SKScene {
     private func hideMiniCard() { card.removeAction(forKey: ActionKey.cardPickup); card.isHidden = true; card.alpha = 0 }
 
     private func applyFacing(_ facing: CatFacing, animated: Bool, duration: TimeInterval) {
-        let xScale: CGFloat
-        let rotation: CGFloat
+        let transform = facingTransform(for: facing)
+        cat.xScale = transform.xScale
+        if animated { cat.run(.rotate(toAngle: transform.rotation, duration: duration, shortestUnitArc: true), withKey: ActionKey.turn) }
+        else { cat.zRotation = transform.rotation }
+    }
+
+    private func facingTransform(for facing: CatFacing) -> (xScale: CGFloat, rotation: CGFloat) {
         switch facing {
-        case .left: xScale = -1; rotation = 0
-        case .right, .resting: xScale = 1; rotation = 0
-        case .up: xScale = 1; rotation = .pi / 2
-        case .down: xScale = 1; rotation = -.pi / 2
+        case .left: (-1, 0)
+        case .right, .resting: (1, 0)
+        case .up: (1, .pi / 2)
+        case .down: (1, -.pi / 2)
         }
-        cat.xScale = xScale
-        if animated { cat.run(.rotate(toAngle: rotation, duration: duration, shortestUnitArc: true), withKey: ActionKey.turn) }
-        else { cat.zRotation = rotation }
     }
 
     private func startWalkLoop(context: CatAnimationContext) {

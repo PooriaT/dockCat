@@ -58,17 +58,20 @@ final class CatWindowController {
 
     private func animateTravel(_ animation: CatAnimation, targetOrigin: CGPoint, speed: Double, reducedMotion: Bool) async {
         let purpose: CatTravelPurpose = switch animation { case .walkHome: .home; default: .presentation }
-        let plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(targetOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
+        var plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(targetOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
         let turn = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .turning, reducedMotion: reducedMotion)
-        let walk = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .walking, reducedMotion: reducedMotion)
+        var walk = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .walking, reducedMotion: reducedMotion)
         await scene.runAsync(purpose == .home ? .turnHome(turn) : .turnToPresentation(turn), duration: 0.18, reducedMotion: reducedMotion)
         await scene.runAsync(purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk), duration: plan.duration, reducedMotion: reducedMotion)
         var result = await motionDriver.move(to: targetOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
         while result == .cancelled, !Task.isCancelled {
             scene.stopLocomotion(cancelled: true, context: walk)
             while isMotionPaused, !Task.isCancelled { try? await Task.sleep(nanoseconds: 50_000_000) }
-            guard !Task.isCancelled else { return }
-            result = await motionDriver.move(to: targetOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
+            guard !Task.isCancelled, let currentTargetOrigin = targetOrigin(for: animation) else { return }
+            plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(currentTargetOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
+            walk = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .walking, reducedMotion: reducedMotion)
+            await scene.runAsync(purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk), duration: plan.duration, reducedMotion: reducedMotion)
+            result = await motionDriver.move(to: currentTargetOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
         }
         scene.stopLocomotion(cancelled: result == .cancelled, context: walk)
         guard result == .completed else { return }
