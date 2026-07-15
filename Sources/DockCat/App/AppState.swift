@@ -26,7 +26,7 @@ final class AppState: ObservableObject {
         screenMonitor = ScreenChangeMonitor { [weak self] in self?.reposition() }
     }
 
-    func stop() { flowTask?.cancel(); timeoutTask?.cancel(); screenMonitor?.stop(); screenMonitor = nil }
+    func stop() { flowTask?.cancel(); timeoutTask?.cancel(); cardWindow.cancelPresentationAnimation(); screenMonitor?.stop(); screenMonitor = nil }
 
     func sendTest(persistent: Bool = false) {
         submit(.init(sourceName: "DockCat", title: persistent ? "Persistent alert" : "Hello from DockCat",
@@ -58,6 +58,7 @@ final class AppState: ObservableObject {
         Task { await queue.setPaused(paused) }
         if paused {
             timeoutTask?.cancel()
+            cardWindow.cancelPresentationAnimation()
             _ = machine.handle(.pause); catState = machine.state
             catWindow.pause()
         } else {
@@ -83,7 +84,10 @@ final class AppState: ObservableObject {
             await transition(.animationCompleted, animation: .pickUp)
             await transition(.animationCompleted, animation: .walkToPresentation)
             _ = machine.handle(.animationCompleted); updateState()
-            cardWindow.show(notification: item, preferences: settings.preferences)
+            catWindow.prepareHandoffPose()
+            let result = await cardWindow.present(notification: item, preferences: settings.preferences, from: catWindow.handoffSourceRect(), reducedMotion: settings.effectiveReducedMotion)
+            guard PresentationChoreography.shouldAcceptPresentationCompletion(result), current?.id == item.id else { flowTask = nil; return }
+            catWindow.completeHandoffPose()
             _ = machine.handle(.cardPresented); updateState()
             scheduleTimeoutIfNeeded(item)
             flowTask = nil
@@ -106,24 +110,33 @@ final class AppState: ObservableObject {
     }
 
     private func advanceAfterDismissal(event: CatEvent) {
+        guard flowTask == nil || machine.state == .waitingForDismissal else { return }
         guard machine.handle(event) else { return }
-        updateState(); cardWindow.hide(); current = nil
+        updateState()
+        let dismissed = current
         flowTask = Task { [weak self] in
             guard let self else { return }
             _ = await queue.completeCurrent()
             if settings.preferences.remainForQueuedMessages, await queue.hasPending(), let next = await queue.next() {
                 current = next
                 _ = machine.handle(.nextNotificationAvailable); updateState()
-                cardWindow.show(notification: next, preferences: settings.preferences)
+                let result = await cardWindow.replace(notification: next, preferences: settings.preferences, reducedMotion: settings.effectiveReducedMotion)
+                guard result == .completed, current?.id == next.id else { flowTask = nil; return }
                 _ = machine.handle(.cardPresented); updateState()
                 scheduleTimeoutIfNeeded(next)
             } else {
+                current = nil
                 _ = machine.handle(.queueEmpty); updateState()
+                let result = await cardWindow.dismissActive(toward: catWindow.handoffSourceRect(), reducedMotion: settings.effectiveReducedMotion)
+                guard result == .completed else { flowTask = nil; return }
+                catWindow.hideCarriedCard()
+                _ = machine.handle(.cardDismissed); updateState()
                 await catWindow.animate(.walkHome, speed: settings.preferences.animationSpeed, reducedMotion: settings.effectiveReducedMotion)
                 _ = machine.handle(.animationCompleted); updateState()
                 await catWindow.animate(.settle, speed: settings.preferences.animationSpeed, reducedMotion: settings.effectiveReducedMotion)
                 _ = machine.handle(.animationCompleted); updateState()
             }
+            _ = dismissed
             flowTask = nil
             beginFlowIfNeeded()
         }
