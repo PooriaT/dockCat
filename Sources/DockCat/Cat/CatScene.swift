@@ -1,3 +1,4 @@
+import DockCatCore
 import SpriteKit
 
 @MainActor
@@ -6,6 +7,10 @@ final class CatScene: SKScene {
     private let body = SKShapeNode(ellipseOf: CGSize(width: 82, height: 48))
     private let head = SKShapeNode(ellipseOf: CGSize(width: 47, height: 41))
     private let card = SKShapeNode(rectOf: CGSize(width: 30, height: 20), cornerRadius: 3)
+    private let carryAnchor = SKNode()
+    private var tail: SKShapeNode?
+    private var hindPaw: SKShapeNode?
+    private var frontPaw: SKShapeNode?
     private let orange = SKColor(red: 0.94, green: 0.49, blue: 0.16, alpha: 1)
     private let darkOrange = SKColor(red: 0.55, green: 0.23, blue: 0.08, alpha: 1)
 
@@ -22,6 +27,7 @@ final class CatScene: SKScene {
 
         addTail()
         addHindPaw()
+        addFrontPaw()
 
         head.fillColor = orange
         head.strokeColor = darkOrange
@@ -33,40 +39,78 @@ final class CatScene: SKScene {
 
         card.fillColor = .white
         card.strokeColor = .systemGray
-        card.position = CGPoint(x: 42, y: 38)
-        card.zPosition = 10
+        carryAnchor.position = CGPoint(x: 42, y: 38)
+        carryAnchor.zPosition = 10
+        card.position = .zero
+        card.zPosition = 1
         card.isHidden = true
 
         cat.position = CGPoint(x: size.width / 2 - 3, y: 34)
         cat.addChild(body)
         cat.addChild(head)
-        cat.addChild(card)
+        cat.addChild(carryAnchor)
+        carryAnchor.addChild(card)
         addChild(cat)
         playLoop()
     }
 
     required init?(coder: NSCoder) { nil }
 
+    private enum ActionKey {
+        static let breathing = "cat.breathing"
+        static let walking = "cat.walking"
+        static let tail = "cat.tail"
+        static let turn = "cat.turn"
+        static let cardPickup = "cat.cardPickup"
+        static let settle = "cat.settle"
+    }
+
     func run(_ animation: CatAnimation, duration: TimeInterval, reducedMotion: Bool, completion: @escaping @MainActor () -> Void) {
-        cat.removeAllActions()
-        let d = reducedMotion ? min(0.2, duration) : duration
+        let d = max(0.05, reducedMotion ? min(0.2, duration) : duration)
         switch animation {
         case .sleep:
-            playLoop(); completion()
+            hideMiniCard()
+            playLoop()
+            completion()
         case .wake:
-            cat.run(.sequence([.rotate(toAngle: 0.08, duration: d / 2), .rotate(toAngle: 0, duration: d / 2), .run { completion() }]))
+            stopBreathing()
+            cat.run(.sequence([.rotate(toAngle: 0.08, duration: d / 2), .rotate(toAngle: 0, duration: d / 2), .run { completion() }]), withKey: ActionKey.turn)
         case .pickUp:
-            card.isHidden = false
+            stopBreathing()
+            showMiniCard()
             card.alpha = 0
-            card.run(.sequence([.fadeIn(withDuration: d), .run { completion() }]))
+            card.run(.sequence([.fadeIn(withDuration: d), .run { completion() }]), withKey: ActionKey.cardPickup)
+        case .turnToPresentation(let context), .turnHome(let context):
+            stopBreathing()
+            applyFacing(context.facing, animated: !reducedMotion, duration: d)
+            cat.run(.sequence([.wait(forDuration: d), .run { completion() }]), withKey: ActionKey.turn)
+        case .walkToPresentationLoop(let context), .walkHomeLoop(let context):
+            stopBreathing()
+            applyFacing(context.facing, animated: false, duration: 0)
+            if context.isCarryingMiniCard { showMiniCard() }
+            if context.phase == .staticCarry || reducedMotion {
+                setStaticCarryPose()
+                completion()
+            } else {
+                startWalkLoop(context: context)
+                completion()
+            }
         case .walkToPresentation, .walkHome:
-            let bob = SKAction.sequence([.moveBy(x: 0, y: 5, duration: d / 4), .moveBy(x: 0, y: -5, duration: d / 4)])
-            cat.run(.sequence([.repeat(bob, count: 2), .run { completion() }]))
+            completion()
+        case .stopAtPresentation(let context):
+            stopWalkLoop()
+            applyFacing(context.facing, animated: false, duration: 0)
+            setStoppedPose(carrying: context.isCarryingMiniCard)
+            cat.run(.sequence([.wait(forDuration: d), .run { completion() }]))
         case .wait:
-            playLoop(); completion()
+            stopWalkLoop()
+            showMiniCard()
+            setStoppedPose(carrying: true)
+            completion()
         case .settle:
-            card.isHidden = true
-            cat.run(.sequence([.scaleY(to: 0.82, duration: d), .run { [weak self] in self?.playLoop(); completion() }]))
+            stopWalkLoop()
+            hideMiniCard()
+            cat.run(.sequence([.scaleY(to: 0.82, duration: d), .run { [weak self] in self?.playLoop(); completion() }]), withKey: ActionKey.settle)
         }
     }
 
@@ -78,11 +122,63 @@ final class CatScene: SKScene {
         }
     }
 
-    func playLoop() {
-        cat.removeAllActions()
-        cat.setScale(1)
-        cat.run(.repeatForever(.sequence([.scaleY(to: 0.96, duration: 1.2), .scaleY(to: 1, duration: 1.2)])), withKey: "breathing")
+    func stopLocomotion(cancelled: Bool, context: CatAnimationContext?) {
+        stopWalkLoop()
+        if cancelled {
+            setStoppedPose(carrying: context?.isCarryingMiniCard ?? !card.isHidden)
+        }
     }
+
+    func playLoop() {
+        stopWalkLoop()
+        cat.removeAction(forKey: ActionKey.turn)
+        cat.removeAction(forKey: ActionKey.settle)
+        cat.setScale(1)
+        cat.zRotation = 0
+        cat.run(.repeatForever(.sequence([.scaleY(to: 0.96, duration: 1.2), .scaleY(to: 1, duration: 1.2)])), withKey: ActionKey.breathing)
+    }
+
+    private func stopBreathing() { cat.removeAction(forKey: ActionKey.breathing); cat.setScale(1) }
+    private func showMiniCard() { card.isHidden = false; card.alpha = 1 }
+    private func hideMiniCard() { card.removeAction(forKey: ActionKey.cardPickup); card.isHidden = true; card.alpha = 0 }
+
+    private func applyFacing(_ facing: CatFacing, animated: Bool, duration: TimeInterval) {
+        let xScale: CGFloat
+        let rotation: CGFloat
+        switch facing {
+        case .left: xScale = -1; rotation = 0
+        case .right, .resting: xScale = 1; rotation = 0
+        case .up: xScale = 1; rotation = .pi / 2
+        case .down: xScale = 1; rotation = -.pi / 2
+        }
+        cat.xScale = xScale
+        if animated { cat.run(.rotate(toAngle: rotation, duration: duration, shortestUnitArc: true), withKey: ActionKey.turn) }
+        else { cat.zRotation = rotation }
+    }
+
+    private func startWalkLoop(context: CatAnimationContext) {
+        guard cat.action(forKey: ActionKey.walking) == nil else { return }
+        let bob = SKAction.sequence([.moveBy(x: 0, y: 4, duration: 0.12), .moveBy(x: 0, y: -4, duration: 0.12)])
+        let paws = SKAction.run { [weak self] in
+            self?.frontPaw?.run(.sequence([.moveBy(x: 5, y: 0, duration: 0.12), .moveBy(x: -5, y: 0, duration: 0.12)]))
+            self?.hindPaw?.run(.sequence([.moveBy(x: -5, y: 0, duration: 0.12), .moveBy(x: 5, y: 0, duration: 0.12)]))
+        }
+        let tailWag = SKAction.run { [weak self] in self?.tail?.run(.sequence([.rotate(toAngle: 0.12, duration: 0.12), .rotate(toAngle: -0.08, duration: 0.12)]), withKey: ActionKey.tail) }
+        cat.run(.repeatForever(.sequence([paws, tailWag, bob])), withKey: ActionKey.walking)
+    }
+
+    private func stopWalkLoop() {
+        cat.removeAction(forKey: ActionKey.walking)
+        tail?.removeAction(forKey: ActionKey.tail)
+        frontPaw?.removeAllActions(); hindPaw?.removeAllActions()
+        cat.position = CGPoint(x: size.width / 2 - 3, y: 34)
+        frontPaw?.position = CGPoint(x: 28, y: -15)
+        hindPaw?.position = CGPoint(x: 13, y: -16)
+        tail?.zRotation = 0
+    }
+
+    private func setStaticCarryPose() { showMiniCard(); body.yScale = 1; head.position = CGPoint(x: 31, y: 16) }
+    private func setStoppedPose(carrying: Bool) { if carrying { showMiniCard() } else { hideMiniCard() }; body.yScale = 1; head.position = CGPoint(x: 31, y: 14) }
 
     private func addTail() {
         let path = CGMutablePath()
@@ -94,6 +190,7 @@ final class CatScene: SKScene {
         tail.lineWidth = 11
         tail.lineCap = .round
         tail.zPosition = 3
+        self.tail = tail
         cat.addChild(tail)
     }
 
@@ -104,6 +201,18 @@ final class CatScene: SKScene {
         paw.lineWidth = 2
         paw.position = CGPoint(x: 13, y: -16)
         paw.zPosition = 4
+        self.hindPaw = paw
+        cat.addChild(paw)
+    }
+
+    private func addFrontPaw() {
+        let paw = SKShapeNode(ellipseOf: CGSize(width: 24, height: 15))
+        paw.fillColor = SKColor(red: 1, green: 0.72, blue: 0.46, alpha: 1)
+        paw.strokeColor = darkOrange
+        paw.lineWidth = 2
+        paw.position = CGPoint(x: 28, y: -15)
+        paw.zPosition = 4
+        self.frontPaw = paw
         cat.addChild(paw)
     }
 
