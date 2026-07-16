@@ -1,6 +1,12 @@
 import Foundation
 
 public actor SystemNotificationPipeline {
+    public struct DismissalRequest: Sendable, Equatable {
+        public let tokenIdentifier: String
+        public let sourceBundleIdentifier: String?
+        public let notificationSubtreePath: [Int]
+        public let stableContainerIdentifier: String?
+    }
     public enum Result: Sendable, Equatable { case enqueued, updatedCurrent, updatedPending, removedCurrent, removedPending, rejected(AccessibilityNotificationRejection), duplicate, queueFull, notFound }
     private let parser: AccessibilityNotificationParser
     private let exclusions: AccessibilityNotificationExclusionPolicy
@@ -12,6 +18,7 @@ public actor SystemNotificationPipeline {
     private var observationAliases: [String: ExternalNotificationIdentity] = [:]
     private var aliasOrder: [String] = []
     private let aliasLimit = 256
+    private var pendingDismissalRequest: DismissalRequest?
 
     public init(queue: NotificationQueue, ownBundleIdentifier: String,
                 parser: AccessibilityNotificationParser = .init(),
@@ -23,6 +30,7 @@ public actor SystemNotificationPipeline {
     }
 
     public func ingest(_ snapshot: AccessibilityNotificationSnapshot, transientDuration: TimeInterval) async -> Result {
+        pendingDismissalRequest = nil
         let candidate: AccessibilityNotificationCandidate
         switch parser.parse(snapshot) { case .failure(let rejection): return .rejected(rejection); case .success(let value): candidate = value }
         if snapshot.observationKind == .destroyed {
@@ -52,8 +60,20 @@ public actor SystemNotificationPipeline {
         case .event(let event):
             let result = await apply(event)
             if result == .queueFull { _ = await tracker.remove(identity) }
+            if [.enqueued, .updatedCurrent, .updatedPending].contains(result),
+               let token = snapshot.opaqueDismissalTokenIdentifier {
+                pendingDismissalRequest = .init(tokenIdentifier: token, sourceBundleIdentifier: candidate.sourceBundleIdentifier,
+                                                notificationSubtreePath: candidate.capture.notificationSubtreePath,
+                                                stableContainerIdentifier: candidate.capture.stableContainerIdentifier)
+            }
             return result
         }
+    }
+
+    /// One-shot handoff ensures an accepted identity is attempted at most once.
+    public func takeDismissalRequest() -> DismissalRequest? {
+        defer { pendingDismissalRequest = nil }
+        return pendingDismissalRequest
     }
 
     public func sourceStopped() async -> [Result] {

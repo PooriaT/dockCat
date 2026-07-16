@@ -4,6 +4,8 @@ import OSLog
 
 @MainActor
 final class AppState: ObservableObject {
+    private lazy var accessibilityElementRegistry = AccessibilityElementRegistry()
+    private lazy var nativeBannerDismissalPerformer = NativeBannerDismissalPerformer(registry: accessibilityElementRegistry, client: AccessibilityAPIClient())
     private enum InterruptedFlow {
         case initialPresentation(DockCatNotification)
         case replacement(DockCatNotification)
@@ -15,6 +17,7 @@ final class AppState: ObservableObject {
     @Published var isPaused = false
     let settings = SettingsStore()
     private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
+        dismissalRegistry: accessibilityElementRegistry,
         eventHandler: { [weak self] event in self?.receive(sourceEvent: event) },
         outcomeHandler: { _ in }
     )
@@ -118,6 +121,21 @@ final class AppState: ObservableObject {
                     snapshot, transientDuration: settings.preferences.defaultTransientDuration
                 )
                 logger.info("Accessibility notification result: \(String(describing: result), privacy: .public)")
+                if settings.preferences.isNativeBannerDismissalEnabled,
+                   systemNotificationAccess.health.isHealthy,
+                   let request = await systemNotificationPipeline.takeDismissalRequest() {
+                    let exclusions = Set(DockCatPreferences.normalizedBundleIdentifiers(
+                        settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers
+                    ))
+                    let outcome = nativeBannerDismissalPerformer.perform(
+                        token: request.tokenIdentifier, sourceBundleIdentifier: request.sourceBundleIdentifier,
+                        notificationSubtreePath: request.notificationSubtreePath,
+                        stableContainerIdentifier: request.stableContainerIdentifier, excluded: exclusions,
+                        ownBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.example.DockCat"
+                    )
+                    logger.info("Native banner dismissal outcome=\(String(describing: outcome), privacy: .public)")
+                    if outcome == .permissionRequired { systemNotificationAccess.sourceDidLosePermission() }
+                }
                 guard !isPaused else { return }
                 switch result {
                 case .enqueued: beginFlowIfNeeded()

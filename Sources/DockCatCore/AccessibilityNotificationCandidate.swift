@@ -29,6 +29,18 @@ public struct AccessibilityNotificationCandidate: Sendable, Equatable {
         public let stableContainerIdentifier: String?
         public let coarseStructuralSignature: String
         public let traversalWasTruncated: Bool
+        /// Child-index path from the retained snapshot root to the parser-selected
+        /// notification container. It is structural metadata, never an AX reference.
+        public let notificationSubtreePath: [Int]
+        public init(sequence: UInt64, processIdentifier: Int32, stableContainerIdentifier: String?,
+                    coarseStructuralSignature: String, traversalWasTruncated: Bool,
+                    notificationSubtreePath: [Int] = []) {
+            self.sequence = sequence; self.processIdentifier = processIdentifier
+            self.stableContainerIdentifier = stableContainerIdentifier
+            self.coarseStructuralSignature = coarseStructuralSignature
+            self.traversalWasTruncated = traversalWasTruncated
+            self.notificationSubtreePath = notificationSubtreePath
+        }
     }
 
     public let sourceBundleIdentifier: String?

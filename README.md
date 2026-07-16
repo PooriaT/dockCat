@@ -1,5 +1,7 @@
 # DockCat
 
+> The experimental System Notifications integration includes an independently opt-in, disabled-by-default best-effort operation to close an original banner *after* DockCat accepts its mirror. It does not prevent native banners: they may appear briefly or remain, and compatibility may change with macOS updates. Detection fails closed, executes no content actions, and bundle-identifier exclusions do not affect mirroring.
+
 DockCat is a native macOS 14+ menu-bar app that places a small animated cat beside the Dock. Internal notifications wake the cat, send it toward the Dock centre with a card, and return it home when the queue becomes idle.
 
 ## Current capabilities

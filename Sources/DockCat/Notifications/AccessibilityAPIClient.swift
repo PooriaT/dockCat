@@ -26,6 +26,10 @@ enum AccessibilityAttribute: String, CaseIterable {
     func elements(_ attribute: AccessibilityAttribute, of element: any AccessibilityElementReference) throws -> [any AccessibilityElementReference]
     func element(_ attribute: AccessibilityAttribute, of element: any AccessibilityElementReference) throws -> (any AccessibilityElementReference)?
     func actions(of element: any AccessibilityElementReference) throws -> [String]
+    func press(_ element: any AccessibilityElementReference) throws
+}
+extension AccessibilityAPIClientProtocol {
+    func press(_ element: any AccessibilityElementReference) throws { throw AccessibilityClientError.unsupported }
 }
 
 @MainActor final class AccessibilityAPIClient: AccessibilityAPIClientProtocol {
@@ -75,6 +79,10 @@ enum AccessibilityAttribute: String, CaseIterable {
     func actions(of element: any AccessibilityElementReference) throws -> [String] {
         var names: CFArray?; let result = AXUIElementCopyActionNames(raw(element), &names)
         guard result == .success else { throw Self.error(result) }; return (names as? [String]) ?? []
+    }
+    func press(_ element: any AccessibilityElementReference) throws {
+        let result = AXUIElementPerformAction(raw(element), kAXPressAction as CFString)
+        guard result == .success else { throw Self.error(result) }
     }
     private func value(_ attribute: AccessibilityAttribute, _ element: any AccessibilityElementReference) throws -> AnyObject? {
         var result: CFTypeRef?; let error = AXUIElementCopyAttributeValue(raw(element), attribute.rawValue as CFString, &result)

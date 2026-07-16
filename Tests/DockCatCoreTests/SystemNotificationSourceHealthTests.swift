@@ -7,8 +7,20 @@ final class SystemNotificationSourceHealthTests: XCTestCase {
         let legacy = Data(#"{"enabled":false,"queueLimit":7}"#.utf8)
         let decoded = try JSONDecoder().decode(DockCatPreferences.self, from: legacy)
         XCTAssertFalse(decoded.systemNotificationsEnabled)
+        XCTAssertFalse(decoded.closeOriginalBannerAfterCapture)
+        XCTAssertFalse(decoded.isNativeBannerDismissalEnabled)
+        XCTAssertEqual(decoded.nativeBannerDismissalExcludedBundleIdentifiers, [])
         XCTAssertFalse(decoded.enabled)
         XCTAssertEqual(decoded.queueLimit, 7)
+    }
+
+    func testDismissalRequiresSourceAndNormalizesExclusions() {
+        var preferences = DockCatPreferences()
+        preferences.closeOriginalBannerAfterCapture = true
+        XCTAssertFalse(preferences.isNativeBannerDismissalEnabled)
+        preferences.systemNotificationsEnabled = true
+        XCTAssertTrue(preferences.isNativeBannerDismissalEnabled)
+        XCTAssertEqual(DockCatPreferences.normalizedBundleIdentifiers([" COM.Example.App ", "com.example.app", ""]), ["com.example.app"])
     }
 
     func testStateSemantics() {

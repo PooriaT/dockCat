@@ -18,6 +18,7 @@ final class AccessibilityNotificationParserTests: XCTestCase {
         XCTAssertEqual(candidate.title.displayValue, "New orbit")
         XCTAssertEqual(candidate.message.displayValue, "New invented body")
         XCTAssertEqual(candidate.sourceBundleIdentifier, "org.example.second")
+        XCTAssertEqual(candidate.capture.notificationSubtreePath, [1])
     }
     func testAmbiguousSiblingContainerIsSafelyRejected() {
         let snapshot = AXFixtures.siblingContainer()

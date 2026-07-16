@@ -14,8 +14,9 @@ public struct AccessibilityNotificationParser: Sendable {
 
     public func parse(_ snapshot: AccessibilityNotificationSnapshot) -> Result<AccessibilityNotificationCandidate, AccessibilityNotificationRejection> {
         let subtree: AccessibilityNotificationSnapshot.Node
+        let notificationSubtreePath: [Int]
         switch notificationSubtree(in: snapshot) {
-        case .success(let node): subtree = node
+        case .success(let selected): subtree = selected.node; notificationSubtreePath = selected.path
         case .failure(let rejection): return .failure(rejection)
         }
         let flattened = flatten(subtree)
@@ -68,30 +69,32 @@ public struct AccessibilityNotificationParser: Sendable {
                               lifecycleHint: lifecycle,
                               capture: .init(sequence: snapshot.captureSequence, processIdentifier: snapshot.origin.processIdentifier,
                                              stableContainerIdentifier: stableID, coarseStructuralSignature: signature,
-                                             traversalWasTruncated: snapshot.traversalWasTruncated),
+                                             traversalWasTruncated: snapshot.traversalWasTruncated,
+                                             notificationSubtreePath: notificationSubtreePath),
                               opaqueDismissalTokenIdentifier: bounded(snapshot.opaqueDismissalTokenIdentifier)))
     }
 
-    private func notificationSubtree(in snapshot: AccessibilityNotificationSnapshot) -> Result<AccessibilityNotificationSnapshot.Node, AccessibilityNotificationRejection> {
-        var containers: [(node: AccessibilityNotificationSnapshot.Node, depth: Int)] = []
-        func visit(_ node: AccessibilityNotificationSnapshot.Node, depth: Int) {
-            if isNotificationContainer(node) { containers.append((node, depth)) }
-            node.children.forEach { visit($0, depth: depth + 1) }
+    private struct SelectedSubtree { let node: AccessibilityNotificationSnapshot.Node; let path: [Int] }
+    private func notificationSubtree(in snapshot: AccessibilityNotificationSnapshot) -> Result<SelectedSubtree, AccessibilityNotificationRejection> {
+        var containers: [SelectedSubtree] = []
+        func visit(_ node: AccessibilityNotificationSnapshot.Node, path: [Int]) {
+            if isNotificationContainer(node) { containers.append(.init(node: node, path: path)) }
+            for (index, child) in node.children.enumerated() { visit(child, path: path + [index]) }
         }
-        visit(snapshot.root, depth: 0)
+        visit(snapshot.root, path: [])
         guard !containers.isEmpty else { return .failure(.unrelatedStructure) }
 
         if let observed = snapshot.observedElementIdentifier {
             let matches = containers.filter { contains(identifier: observed, in: $0.node) }
-            if let maximumDepth = matches.map(\.depth).max() {
-                let deepest = matches.filter { $0.depth == maximumDepth }
+            if let maximumDepth = matches.map({ $0.path.count }).max() {
+                let deepest = matches.filter { $0.path.count == maximumDepth }
                 guard deepest.count == 1 else { return .failure(.ambiguousNotificationStructure) }
-                return .success(deepest[0].node)
+                return .success(deepest[0])
             }
         }
-        if isNotificationContainer(snapshot.root) { return .success(snapshot.root) }
+        if isNotificationContainer(snapshot.root) { return .success(.init(node: snapshot.root, path: [])) }
         guard containers.count == 1 else { return .failure(.ambiguousNotificationStructure) }
-        return .success(containers[0].node)
+        return .success(containers[0])
     }
 
     private func isNotificationContainer(_ node: AccessibilityNotificationSnapshot.Node) -> Bool {

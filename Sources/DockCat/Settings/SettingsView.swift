@@ -59,6 +59,7 @@ struct SettingsView: View {
 private struct SystemNotificationsSettingsView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var access: SystemNotificationAccessController
+    @State private var exclusionIdentifier = ""
 
     init(state: AppState) {
         self.state = state
@@ -87,11 +88,55 @@ private struct SystemNotificationsSettingsView: View {
                         .foregroundStyle(.orange)
                 }
             }
+            Section("Original banner (Experimental)") {
+                Toggle("Best-effort close original banner after capture", isOn: Binding(
+                    get: { state.settings.preferences.closeOriginalBannerAfterCapture },
+                    set: { state.settings.preferences.closeOriginalBannerAfterCapture = $0 }
+                ))
+                .disabled(!state.settings.preferences.systemNotificationsEnabled || !access.health.isHealthy)
+                Text("DockCat acts only after a mirrored notification is accepted. The native banner may appear briefly or may remain visible. Close-control compatibility can change across macOS versions.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    TextField("Bundle identifier (for example, com.example.app)", text: $exclusionIdentifier)
+                    Button("Add") { addExclusion() }.disabled(normalizedExclusion.isEmpty || isOwnBundleIdentifier)
+                }
+                ForEach(state.settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers, id: \.self) { identifier in
+                    HStack {
+                        Text(friendlyName(for: identifier)).fontWeight(.medium)
+                        Text(identifier).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Remove") { removeExclusion(identifier) }
+                    }
+                }
+                Text("Exclusions affect closing the original only; notifications are still mirrored.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Limitations") {
-                Text("The observer is not implemented yet, so this source cannot become active. Native notification banners may still appear; suppression is not implemented.")
+                Text("Close detection deliberately fails closed and never runs reply, open, options, destructive, or content actions. This is not pre-display suppression.")
             }
         }
         .onAppear { access.refresh() }
+    }
+
+    private var normalizedExclusion: String { DockCatPreferences.normalizeBundleIdentifier(exclusionIdentifier) }
+    private var isOwnBundleIdentifier: Bool {
+        normalizedExclusion == DockCatPreferences.normalizeBundleIdentifier(Bundle.main.bundleIdentifier ?? "com.example.DockCat")
+    }
+    private func addExclusion() {
+        guard !normalizedExclusion.isEmpty, !isOwnBundleIdentifier else { return }
+        state.settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers = DockCatPreferences.normalizedBundleIdentifiers(
+            state.settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers + [normalizedExclusion]
+        )
+        exclusionIdentifier = ""
+    }
+    private func removeExclusion(_ identifier: String) {
+        state.settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers.removeAll { $0 == identifier }
+    }
+    private func friendlyName(for identifier: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier),
+              let bundle = Bundle(url: url) else { return "Unknown application" }
+        return bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? bundle.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Unknown application"
     }
 
     private var statusTitle: String {
