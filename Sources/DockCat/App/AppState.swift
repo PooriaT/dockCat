@@ -16,11 +16,26 @@ final class AppState: ObservableObject {
     let settings = SettingsStore()
     private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
         eventHandler: { [weak self] event in self?.receive(sourceEvent: event) },
-        outcomeHandler: { [weak self] outcome in self?.systemSourceReported(outcome) }
+        outcomeHandler: { _ in }
     )
-    lazy var systemNotificationAccess = SystemNotificationAccessController(
-        enabled: settings.preferences.systemNotificationsEnabled, source: systemNotificationSource
-    )
+    lazy var systemNotificationAccess: SystemNotificationAccessController = {
+        let controller = SystemNotificationAccessController(
+            enabled: settings.preferences.systemNotificationsEnabled,
+            source: systemNotificationSource,
+            startImmediately: false
+        )
+        systemNotificationSource.setOutcomeHandler { [weak controller] outcome in
+            guard let controller else { return }
+            switch outcome {
+            case .active: controller.sourceDidStart()
+            case .degraded: controller.sourceDidDegrade()
+            case .unavailable: controller.sourceDidFailToStart()
+            case .permissionRequired: controller.sourceDidLosePermission()
+            }
+        }
+        controller.refresh()
+        return controller
+    }()
 
     private let queue = DockCatCore.NotificationQueue()
     private var machine = CatStateMachine()
@@ -70,15 +85,6 @@ final class AppState: ObservableObject {
         switch sourceEvent {
         case .notification(let notification): submit(notification)
         case .accessibilitySnapshot: logger.debug("Accessibility candidate accepted for future parsing")
-        }
-    }
-
-    private func systemSourceReported(_ outcome: SystemNotificationAccessibilitySource.Outcome) {
-        switch outcome {
-        case .active: systemNotificationAccess.sourceDidStart()
-        case .degraded: systemNotificationAccess.sourceDidDegrade()
-        case .unavailable: systemNotificationAccess.sourceDidFailToStart()
-        case .permissionRequired: systemNotificationAccess.sourceDidLosePermission()
         }
     }
 

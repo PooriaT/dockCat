@@ -47,6 +47,25 @@ import XCTest
         let controller = SystemNotificationAccessController(enabled: true, trust: TrustFake(true), source: source)
         controller.sourceDidDegrade(); XCTAssertEqual(controller.health, .init(.degraded, reason: .compatibilityProblem))
         controller.sourceDidFailToStart(); XCTAssertEqual(controller.health, .init(.unavailable, reason: .startupFailed))
+        XCTAssertEqual(source.stops, 1)
+        controller.refresh()
+        XCTAssertEqual(source.starts, 2)
+        XCTAssertEqual(controller.health.state, .starting)
+    }
+
+    func testDeferredStartupCanInstallSynchronousOutcomeHandlerFirst() {
+        let source = SourceFake()
+        let controller = SystemNotificationAccessController(
+            enabled: true, trust: TrustFake(true), source: source, startImmediately: false
+        )
+        XCTAssertEqual(controller.health.state, .disabled)
+        XCTAssertEqual(source.starts, 0)
+
+        source.onStart = { [weak controller] in controller?.sourceDidStart() }
+        controller.refresh()
+
+        XCTAssertEqual(source.starts, 1)
+        XCTAssertEqual(controller.health.state, .active)
     }
 
     func testCallbacksAfterDisableCannotOverwriteDisabledHealth() {
@@ -84,6 +103,6 @@ import XCTest
     func requestTrust() -> Bool { requests += 1; return trusted }
 }
 @MainActor private final class SourceFake: SystemNotificationSourceControlling {
-    var starts = 0; var stops = 0
-    func start() { starts += 1 }; func stop() { stops += 1 }
+    var starts = 0; var stops = 0; var onStart: (() -> Void)?
+    func start() { starts += 1; onStart?() }; func stop() { stops += 1 }
 }

@@ -14,7 +14,7 @@ import OSLog
     private let client: AccessibilityAPIClientProtocol
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AccessibilityObserver")
     private let eventHandler: @MainActor (NotificationSourceEvent) -> Void
-    private let outcomeHandler: @MainActor (Outcome) -> Void
+    private var outcomeHandler: @MainActor (Outcome) -> Void
     private var observer: (any AccessibilityObserverReference)?
     private var application: (any AccessibilityElementReference)?
     private var registrations = Set<String>()
@@ -30,6 +30,7 @@ import OSLog
         self.trust = trust; self.resolver = resolver; self.client = client
         self.eventHandler = eventHandler; self.outcomeHandler = outcomeHandler
     }
+    func setOutcomeHandler(_ handler: @escaping @MainActor (Outcome) -> Void) { outcomeHandler = handler }
     func start() {
         guard !started else { return }; started = true
         logger.info("Accessibility source starting")
