@@ -68,10 +68,19 @@ final class SystemNotificationAccessController: ObservableObject {
         refresh()
     }
 
-    func sourceDidStart() { guard enabled, lastTrust == true, startRequested else { return }; transition(to: .init(.active)) }
-    func sourceDidDegrade() { guard enabled else { return }; transition(to: .init(.degraded, reason: .compatibilityProblem)) }
-    func sourceDidFailToStart() { startRequested = false; transition(to: .init(.unavailable, reason: .startupFailed)) }
-    func sourceDidLosePermission() { lastTrust = false; stopSource(); transition(to: .init(.permissionRequired, reason: .permissionRevoked)) }
+    func sourceDidStart() { guard acceptsSourceCallback else { return }; transition(to: .init(.active)) }
+    func sourceDidDegrade() { guard acceptsSourceCallback else { return }; transition(to: .init(.degraded, reason: .compatibilityProblem)) }
+    func sourceDidFailToStart() {
+        guard acceptsSourceCallback else { return }
+        startRequested = false
+        transition(to: .init(.unavailable, reason: .startupFailed))
+    }
+    func sourceDidLosePermission() {
+        guard acceptsSourceCallback else { return }
+        lastTrust = false
+        stopSource()
+        transition(to: .init(.permissionRequired, reason: .permissionRevoked))
+    }
     func shutdown() { stopSource() }
 
     private func stopSource() {
@@ -80,6 +89,9 @@ final class SystemNotificationAccessController: ObservableObject {
         logger.info("Source stop requested")
         source?.stop()
     }
+
+    /// Reject callbacks from a source generation that has already been stopped.
+    private var acceptsSourceCallback: Bool { enabled && lastTrust == true && startRequested }
 
     private func transition(to newHealth: SystemNotificationSourceHealth) {
         guard health != newHealth else { return }

@@ -48,6 +48,33 @@ import XCTest
         controller.sourceDidDegrade(); XCTAssertEqual(controller.health, .init(.degraded, reason: .compatibilityProblem))
         controller.sourceDidFailToStart(); XCTAssertEqual(controller.health, .init(.unavailable, reason: .startupFailed))
     }
+
+    func testCallbacksAfterDisableCannotOverwriteDisabledHealth() {
+        let source = SourceFake()
+        let controller = SystemNotificationAccessController(enabled: true, trust: TrustFake(true), source: source)
+        controller.setEnabled(false)
+
+        controller.sourceDidFailToStart()
+        controller.sourceDidLosePermission()
+        controller.sourceDidDegrade()
+        controller.sourceDidStart()
+
+        XCTAssertEqual(controller.health.state, .disabled)
+        XCTAssertEqual(source.stops, 1)
+    }
+
+    func testDelayedStartupFailureCannotOverwritePermissionRevocation() {
+        let trust = TrustFake(true)
+        let source = SourceFake()
+        let controller = SystemNotificationAccessController(enabled: true, trust: trust, source: source)
+        trust.trusted = false
+        controller.refresh()
+
+        controller.sourceDidFailToStart()
+
+        XCTAssertEqual(controller.health, .init(.permissionRequired, reason: .permissionRevoked))
+        XCTAssertEqual(source.stops, 1)
+    }
 }
 
 @MainActor private final class TrustFake: AccessibilityTrustChecking {
