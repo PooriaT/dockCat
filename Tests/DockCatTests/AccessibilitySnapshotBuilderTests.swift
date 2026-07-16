@@ -17,6 +17,14 @@ import XCTest
         let result = AccessibilitySnapshotBuilder(client: AXFake()).build(from: FakeElement(1), origin: .init(bundleIdentifier: nil, processIdentifier: 1), kind: .unknown, sequence: 2)
         XCTAssertNil(result.snapshot.root.role); XCTAssertNil(result.snapshot.root.enabled)
     }
+
+    func testObservedElementIdentifierIsPassedThroughAsBoundedData() {
+        let result = AccessibilitySnapshotBuilder(client: AXFake(), limits: .init(maximumDepth: 1, maximumNodeCount: 2,
+            maximumStringLength: 5, maximumTotalTextLength: 20)).build(
+                from: FakeElement(1), origin: .init(bundleIdentifier: nil, processIdentifier: 1),
+                kind: .created, sequence: 3, observedElementIdentifier: "notification.long")
+        XCTAssertEqual(result.snapshot.observedElementIdentifier, "notif")
+    }
 }
 
 @MainActor private final class FakeElement: AccessibilityElementReference {

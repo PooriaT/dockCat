@@ -38,6 +38,9 @@ final class AppState: ObservableObject {
     }()
 
     private let queue = DockCatCore.NotificationQueue()
+    private lazy var systemNotificationPipeline = SystemNotificationPipeline(
+        queue: queue, ownBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.example.DockCat"
+    )
     private var machine = CatStateMachine()
     private let catWindow = CatWindowController()
     private let cardWindow = CardWindowController()
@@ -80,11 +83,20 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Staged source router: candidate AX snapshots deliberately cannot enter the presentation queue.
     func receive(sourceEvent: NotificationSourceEvent) {
         switch sourceEvent {
         case .notification(let notification): submit(notification)
-        case .accessibilitySnapshot: logger.debug("Accessibility candidate accepted for future parsing")
+        case .accessibilitySnapshot(let snapshot):
+            guard settings.preferences.enabled else { return }
+            Task {
+                await queue.setLimit(settings.preferences.queueLimit)
+                let result = await systemNotificationPipeline.ingest(
+                    snapshot, transientDuration: settings.preferences.defaultTransientDuration
+                )
+                logger.info("Accessibility notification result: \(String(describing: result), privacy: .public)")
+                guard result == .enqueued, !isPaused else { return }
+                beginFlowIfNeeded()
+            }
         }
     }
 

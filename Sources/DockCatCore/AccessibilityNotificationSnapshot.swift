@@ -2,7 +2,13 @@ import Foundation
 
 public struct AccessibilityNotificationSnapshot: Sendable, Equatable {
     public enum ObservationKind: String, Sendable, Codable { case created, childrenChanged, layoutChanged, windowCreated, valueChanged, destroyed, unknown }
-    public struct Origin: Sendable, Equatable { public let bundleIdentifier: String?; public let processIdentifier: Int32 }
+    public struct Origin: Sendable, Equatable {
+        public let bundleIdentifier: String?
+        public let processIdentifier: Int32
+        public init(bundleIdentifier: String?, processIdentifier: Int32) {
+            self.bundleIdentifier = bundleIdentifier; self.processIdentifier = processIdentifier
+        }
+    }
     public struct Node: Sendable, Equatable {
         public let role, subrole, identifier, title, value, elementDescription, help: String?
         public let enabled, selected: Bool?
@@ -20,12 +26,15 @@ public struct AccessibilityNotificationSnapshot: Sendable, Equatable {
     public let observationKind: ObservationKind
     public let captureSequence: UInt64
     public let root: Node
+    public let observedElementIdentifier: String?
     public let opaqueDismissalTokenIdentifier: String?
     public let traversalWasTruncated: Bool
     public init(origin: Origin, observationKind: ObservationKind, captureSequence: UInt64, root: Node,
+                observedElementIdentifier: String? = nil,
                 opaqueDismissalTokenIdentifier: String? = nil, traversalWasTruncated: Bool = false) {
         self.origin = origin; self.observationKind = observationKind; self.captureSequence = captureSequence
-        self.root = root; self.opaqueDismissalTokenIdentifier = opaqueDismissalTokenIdentifier
+        self.root = root; self.observedElementIdentifier = observedElementIdentifier
+        self.opaqueDismissalTokenIdentifier = opaqueDismissalTokenIdentifier
         self.traversalWasTruncated = traversalWasTruncated
     }
 }
