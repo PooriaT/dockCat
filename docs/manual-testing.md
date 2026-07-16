@@ -25,3 +25,13 @@
 ## Cancellation
 
 - Pause, disable, stop, or otherwise cancel during card presentation and confirm stale animation completion does not show, dismiss, or overwrite a later notification.
+
+## Experimental System Notifications onboarding
+
+- With fresh preferences, open the System tab and confirm the experimental source is disabled and no Accessibility prompt appears.
+- Enable it without trust and confirm the status is **Accessibility permission required** while Developer test notifications and `dockcat://notify` continue to work.
+- Press **Request Accessibility Permission** and confirm only that explicit action initiates the system-controlled permission flow.
+- Return from System Settings or press **Recheck** and confirm the status updates without relaunching.
+- With trust granted, confirm the status is **Unavailable**, not **Active**, because the observer is deferred to issue #68.
+- Revoke permission, reactivate DockCat, and confirm the status returns to permission required with revocation guidance.
+- Disable the source and confirm it remains disabled after relaunch. Confirm native banners are not suppressed.
