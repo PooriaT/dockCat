@@ -22,13 +22,17 @@ public struct DockCatPreferences: Codable, Equatable {
     public var idleAnimation = true
     /// Opt-in gate for the experimental Accessibility-backed source.
     public var systemNotificationsEnabled = false
+    /// Experimental, post-acceptance operation; never implies banner suppression.
+    public var closeOriginalBannerAfterCapture = false
+    public var nativeBannerDismissalExcludedBundleIdentifiers: [String] = []
 
     private enum CodingKeys: String, CodingKey {
         case enabled, pauseAnimations, displaySelection, sleepingCorner, positionOffset
         case dockEndOffset, cardOffset, catScale, defaultTransientDuration, queueLimit
         case transientManuallyDismissible, clickCardOpensAction, remainForQueuedMessages
         case animationSpeed, reducedMotion, disableWalking, idleAnimation
-        case systemNotificationsEnabled
+        case systemNotificationsEnabled, closeOriginalBannerAfterCapture
+        case nativeBannerDismissalExcludedBundleIdentifiers
     }
 
     public init() {}
@@ -54,5 +58,21 @@ public struct DockCatPreferences: Codable, Equatable {
         disableWalking = try values.decodeIfPresent(Bool.self, forKey: .disableWalking) ?? defaults.disableWalking
         idleAnimation = try values.decodeIfPresent(Bool.self, forKey: .idleAnimation) ?? defaults.idleAnimation
         systemNotificationsEnabled = try values.decodeIfPresent(Bool.self, forKey: .systemNotificationsEnabled) ?? false
+        closeOriginalBannerAfterCapture = try values.decodeIfPresent(Bool.self, forKey: .closeOriginalBannerAfterCapture) ?? false
+        nativeBannerDismissalExcludedBundleIdentifiers = Self.normalizedBundleIdentifiers(
+            try values.decodeIfPresent([String].self, forKey: .nativeBannerDismissalExcludedBundleIdentifiers) ?? []
+        )
+    }
+
+    public var isNativeBannerDismissalEnabled: Bool {
+        systemNotificationsEnabled && closeOriginalBannerAfterCapture
+    }
+
+    public static func normalizeBundleIdentifier(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    public static func normalizedBundleIdentifiers(_ values: [String]) -> [String] {
+        Array(Set(values.map(normalizeBundleIdentifier).filter { !$0.isEmpty })).sorted()
     }
 }

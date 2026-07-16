@@ -10,3 +10,7 @@ When a callback snapshot contains sibling banners, DockCat reads fields only fro
 # Lifecycle metadata
 
 External lifecycle identity contains only a source namespace and opaque stable item identifier. DockCat does not retain raw Accessibility references or AX trees in notifications, and lifecycle diagnostics must not include notification title or body content.
+
+## Native banner dismissal
+
+Experimental original-banner closing is independently opt-in. Opaque, non-persistent tokens retain Accessibility elements only inside the app process for at most eight seconds, in a registry capped at 64 entries. Tokens are removed on use, expiry, permission loss, or source stop. Diagnostics contain outcome categories and bundle-identifier exclusion matches, never notification content, button labels, AX tree dumps, user identifiers, or bundle paths.

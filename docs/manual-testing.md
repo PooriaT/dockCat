@@ -55,3 +55,7 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 With experimental system notifications enabled, verify a simple banner is transient, an action-oriented alert is persistent, and an ambiguous fixture remains until its source disappears. Update visible content and confirm the card changes without cat travel. Remove active and pending native items and confirm ordered active dismissal and pending removal. Revoke Accessibility permission and confirm external cards clear while internal test and URL notifications continue. Queue several items to verify FIFO. Logs must contain identities/outcomes only, never content.
 
 DockCat deliberately does not close or act on the original native notification; native action execution belongs to issue #71.
+
+## Experimental original-banner closing
+
+With the System Notifications source active and Accessibility permission granted, enable **Best-effort close original banner after capture**. Verify that DockCat accepts the mirror before the native close attempt; the original may appear briefly or remain. Exercise close, reply, open, options, and destructive controls and confirm only a strongly identified close is pressed. Exclude an app by bundle identifier and confirm its banner remains while its mirror appears. Then disable the option, revoke permission, and test a banner without an exposed close button; all must safely perform no action. Confirm logs contain no notification text or control labels and that the mirrored card follows the existing disappearance lifecycle.

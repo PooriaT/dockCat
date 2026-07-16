@@ -12,6 +12,7 @@ import OSLog
     private let trust: AccessibilityTrustChecking
     private let resolver: NotificationCenterProcessResolving
     private let client: AccessibilityAPIClientProtocol
+    private let dismissalRegistry: AccessibilityElementRegistry
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AccessibilityObserver")
     private let eventHandler: @MainActor (NotificationSourceEvent) -> Void
     private var outcomeHandler: @MainActor (Outcome) -> Void
@@ -25,9 +26,10 @@ import OSLog
 
     init(trust: AccessibilityTrustChecking = AccessibilityTrustController(), resolver: NotificationCenterProcessResolving = NotificationCenterProcessResolver(),
          client: AccessibilityAPIClientProtocol = AccessibilityAPIClient(),
+         dismissalRegistry: AccessibilityElementRegistry = AccessibilityElementRegistry(),
          eventHandler: @escaping @MainActor (NotificationSourceEvent) -> Void,
          outcomeHandler: @escaping @MainActor (Outcome) -> Void) {
-        self.trust = trust; self.resolver = resolver; self.client = client
+        self.trust = trust; self.resolver = resolver; self.client = client; self.dismissalRegistry = dismissalRegistry
         self.eventHandler = eventHandler; self.outcomeHandler = outcomeHandler
     }
     func setOutcomeHandler(_ handler: @escaping @MainActor (Outcome) -> Void) { outcomeHandler = handler }
@@ -74,6 +76,7 @@ import OSLog
         } catch { logger.error("AX observer creation failed category=\(String(describing: error), privacy: .public)"); detachObserver(); outcomeHandler(.unavailable) }
     }
     private func detachObserver() {
+        dismissalRegistry.removeAll()
         pendingSnapshot?.cancel(); pendingSnapshot = nil
         if let observer, let application { for notification in registrations { client.remove(notification: notification, element: application, observer: observer) }; client.detach(observer) }
         registrations.removeAll(); observer = nil; application = nil; process = nil
@@ -88,9 +91,15 @@ import OSLog
             sequence &+= 1
             let kind = Self.kind(notification)
             let observedIdentifier = try? client.string(.identifier, of: changed)
+            // A destroyed callback is normal after a successful close. Clearing is
+            // conservative: it prevents retaining stale controls across lifecycle churn.
+            let dismissalToken: AccessibilityDismissalToken?
+            if kind == .destroyed { dismissalRegistry.removeAll(); dismissalToken = nil }
+            else { dismissalToken = dismissalRegistry.register(root: candidate, processIdentifier: process.processIdentifier) }
             let result = AccessibilitySnapshotBuilder(client: client).build(from: candidate,
                 origin: .init(bundleIdentifier: process.bundleIdentifier, processIdentifier: process.processIdentifier),
-                kind: kind, sequence: sequence, observedElementIdentifier: observedIdentifier)
+                kind: kind, sequence: sequence, observedElementIdentifier: observedIdentifier,
+                opaqueDismissalTokenIdentifier: dismissalToken?.identifier)
             logger.info("AX candidate snapshot count=\(self.sequence, privacy: .public), truncations=\(result.truncatedNodeCount, privacy: .public)")
             eventHandler(.accessibilitySnapshot(result.snapshot))
             pendingSnapshot = nil

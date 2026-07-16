@@ -13,7 +13,7 @@ struct AccessibilitySnapshotLimits: Sendable, Equatable {
 
     func build(from root: any AccessibilityElementReference, origin: AccessibilityNotificationSnapshot.Origin,
                kind: AccessibilityNotificationSnapshot.ObservationKind, sequence: UInt64,
-               observedElementIdentifier: String? = nil) -> Result {
+               observedElementIdentifier: String? = nil, opaqueDismissalTokenIdentifier: String? = nil) -> Result {
         var visited = Set<Int>(), nodes = 0, text = 0, truncations = 0
         func clipped(_ value: String?) -> String? {
             guard let value else { return nil }; let remaining = max(0, limits.maximumTotalTextLength - text)
@@ -38,6 +38,7 @@ struct AccessibilitySnapshotLimits: Sendable, Equatable {
         let boundedObservedIdentifier = observedElementIdentifier.map { String($0.prefix(limits.maximumStringLength)) }
         return .init(snapshot: .init(origin: origin, observationKind: kind, captureSequence: sequence, root: built,
                                      observedElementIdentifier: boundedObservedIdentifier,
+                                     opaqueDismissalTokenIdentifier: opaqueDismissalTokenIdentifier,
                                      traversalWasTruncated: truncations > 0), truncatedNodeCount: truncations)
     }
 }

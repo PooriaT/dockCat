@@ -32,3 +32,9 @@ Repeated equivalent observations are ignored. Meaningful changes replace a pendi
 Presentation classification is best effort. A structurally identified simple banner is transient; an alert or item with action controls is persistent. Ambiguous structures are conservatively persistent until their source disappears so important content is not silently lost. This is structural policy, not an application allowlist, and macOS UI changes may reduce its accuracy.
 
 The tracker is capacity bounded and uses a bounded reconciliation age for missing destruction callbacks. Source shutdown or Accessibility permission loss immediately treats every tracked item as disappeared. Internal queue entries are untouched; a restarted source begins with an empty lifecycle set.
+
+## Experimental original-banner closing
+
+The System Notifications source offers a separate **Best-effort close original banner after capture** option. It is disabled by default and runs only after Accessibility capture, parsing, lifecycle acceptance, and queue acceptance. It is not pre-display suppression: the native banner can appear briefly or remain visible.
+
+Close-control detection deliberately fails closed. DockCat presses only a structurally identified close/dismiss button and never reply, open, options, destructive, custom, or content actions. Per-application exclusions are stored as normalized bundle identifiers and affect closing only; excluded notifications are still mirrored. macOS Accessibility structures are not a compatibility contract and may change between releases.
