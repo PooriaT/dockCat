@@ -50,6 +50,8 @@ final class AppState: ObservableObject {
     private var flowTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
     private var lifecycleReconciliationTask: Task<Void, Never>?
+    private var deferredExternalUpdates = Set<ExternalNotificationIdentity>()
+    private var deferredExternalDisappearances = Set<ExternalNotificationIdentity>()
     private var interruptedFlow: InterruptedFlow?
     private var screenMonitor: ScreenChangeMonitor?
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
@@ -81,6 +83,7 @@ final class AppState: ObservableObject {
 
     func setSystemNotificationsEnabled(_ enabled: Bool) {
         settings.preferences.systemNotificationsEnabled = enabled
+        if !enabled { clearExternalNotifications() }
         systemNotificationAccess.setEnabled(enabled)
     }
 
@@ -131,8 +134,13 @@ final class AppState: ObservableObject {
     }
 
     private func replaceUpdatedCurrent() async {
-        guard flowTask == nil, machine.state == .waitingForDismissal,
-              let updated = await queue.currentNotification(), updated.externalIdentity != nil else { return }
+        guard let queued = await queue.currentNotification(), let identity = queued.externalIdentity else { return }
+        guard flowTask == nil, machine.state == .waitingForDismissal else {
+            deferredExternalUpdates.insert(identity)
+            return
+        }
+        let updated = queued
+        deferredExternalUpdates.remove(identity)
         timeoutTask?.cancel()
         current = updated
         guard machine.handle(.notificationUpdated) else { return }
@@ -148,9 +156,27 @@ final class AppState: ObservableObject {
     }
 
     private func dismissSourceCurrent() {
-        guard current?.externalIdentity != nil else { return }
+        guard let identity = current?.externalIdentity else { return }
+        guard flowTask == nil, machine.state == .waitingForDismissal else {
+            deferredExternalDisappearances.insert(identity)
+            return
+        }
+        deferredExternalDisappearances.remove(identity)
+        deferredExternalUpdates.remove(identity)
         timeoutTask?.cancel()
         advanceAfterDismissal(event: .sourceDisappeared)
+    }
+
+    /// Applies lifecycle work that arrived while wake/travel/card animation owned the flow.
+    /// Disappearance wins over an update because its queue item has already been removed.
+    private func applyDeferredExternalLifecycle() async {
+        guard flowTask == nil, machine.state == .waitingForDismissal,
+              let identity = current?.externalIdentity else { return }
+        if deferredExternalDisappearances.contains(identity) {
+            dismissSourceCurrent()
+        } else if deferredExternalUpdates.contains(identity) {
+            await replaceUpdatedCurrent()
+        }
     }
 
     func receive(url: URL) {
@@ -222,8 +248,9 @@ final class AppState: ObservableObject {
         interruptedFlow = nil
         catWindow.completeHandoffPose()
         _ = machine.handle(.cardPresented); updateState()
-        scheduleTimeoutIfNeeded(item)
         flowTask = nil
+        await applyDeferredExternalLifecycle()
+        if flowTask == nil { scheduleTimeoutIfNeeded(item) }
     }
 
     private func presentReplacement(_ item: DockCatNotification) async {
@@ -237,8 +264,9 @@ final class AppState: ObservableObject {
         }
         interruptedFlow = nil
         _ = machine.handle(.cardPresented); updateState()
-        scheduleTimeoutIfNeeded(item)
         flowTask = nil
+        await applyDeferredExternalLifecycle()
+        if flowTask == nil { scheduleTimeoutIfNeeded(item) }
     }
 
     private func finishDismissal(_ item: DockCatNotification) async {

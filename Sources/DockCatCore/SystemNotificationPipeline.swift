@@ -7,6 +7,11 @@ public actor SystemNotificationPipeline {
     private let tracker: ExternalNotificationLifecycleTracker
     private let queue: NotificationQueue
     private let policy: ExternalPresentationPolicy
+    /// Maps callback element identifiers to the parser-selected item identity so
+    /// descendant destruction callbacks resolve exactly like appearances.
+    private var observationAliases: [String: ExternalNotificationIdentity] = [:]
+    private var aliasOrder: [String] = []
+    private let aliasLimit = 256
 
     public init(queue: NotificationQueue, ownBundleIdentifier: String,
                 parser: AccessibilityNotificationParser = .init(),
@@ -18,15 +23,18 @@ public actor SystemNotificationPipeline {
     }
 
     public func ingest(_ snapshot: AccessibilityNotificationSnapshot, transientDuration: TimeInterval) async -> Result {
-        if snapshot.observationKind == .destroyed {
-            guard let identity = identity(for: snapshot) else { return .rejected(.disappeared) }
-            guard case .event(let event) = await tracker.remove(identity) else { return .rejected(.disappeared) }
-            return await apply(event)
-        }
         let candidate: AccessibilityNotificationCandidate
         switch parser.parse(snapshot) { case .failure(let rejection): return .rejected(rejection); case .success(let value): candidate = value }
+        if snapshot.observationKind == .destroyed {
+            let identity = identity(for: candidate, snapshot: snapshot)
+            guard case .event(let event) = await tracker.remove(identity) else { return .rejected(.disappeared) }
+            removeAliases(for: identity)
+            return await apply(event)
+        }
         if let rejection = exclusions.rejection(for: candidate) { return .rejected(rejection) }
-        let identity = identity(for: candidate)
+        let identity = identity(for: candidate, snapshot: snapshot)
+        if let observed = snapshot.observedElementIdentifier { rememberAlias(observed, identity: identity) }
+        if let token = snapshot.opaqueDismissalTokenIdentifier { rememberAlias(token, identity: identity) }
         let classification = policy.classify(candidate)
         let presentation: DockCatNotification.Presentation
         let evidence: DockCatNotification.Classification
@@ -51,6 +59,8 @@ public actor SystemNotificationPipeline {
     public func sourceStopped() async -> [Result] {
         var results: [Result] = []
         for event in await tracker.sourceStopped() { results.append(await apply(event)) }
+        observationAliases.removeAll(keepingCapacity: true)
+        aliasOrder.removeAll(keepingCapacity: true)
         return results
     }
 
@@ -75,12 +85,34 @@ public actor SystemNotificationPipeline {
         }
     }
 
-    private func identity(for candidate: AccessibilityNotificationCandidate) -> ExternalNotificationIdentity {
-        let stable = candidate.capture.stableContainerIdentifier ?? candidate.opaqueDismissalTokenIdentifier ?? candidate.capture.coarseStructuralSignature
+    private func identity(for candidate: AccessibilityNotificationCandidate,
+                          snapshot: AccessibilityNotificationSnapshot) -> ExternalNotificationIdentity {
+        if let token = snapshot.opaqueDismissalTokenIdentifier, let identity = observationAliases[token] { return identity }
+        if let observed = snapshot.observedElementIdentifier, let identity = observationAliases[observed] { return identity }
+        let stable: String
+        if let container = candidate.capture.stableContainerIdentifier {
+            stable = container
+        } else if let token = candidate.opaqueDismissalTokenIdentifier {
+            stable = token
+        } else {
+            // A content fingerprint is preferable to a coarse hierarchy here: it
+            // distinguishes simultaneous identical-shaped banners. Subsequent
+            // callbacks retain identity through the callback-element alias above.
+            stable = "fallback:\(NotificationFingerprint.make(for: candidate).rawValue)"
+        }
         return .init(sourceNamespace: "macos.accessibility.notification-center", stableItemIdentifier: stable)
     }
-    private func identity(for snapshot: AccessibilityNotificationSnapshot) -> ExternalNotificationIdentity? {
-        guard let stable = snapshot.observedElementIdentifier ?? snapshot.opaqueDismissalTokenIdentifier else { return nil }
-        return .init(sourceNamespace: "macos.accessibility.notification-center", stableItemIdentifier: stable)
+
+    private func removeAliases(for identity: ExternalNotificationIdentity) {
+        observationAliases = observationAliases.filter { $0.value != identity }
+        aliasOrder.removeAll { observationAliases[$0] == nil }
+    }
+
+    private func rememberAlias(_ alias: String, identity: ExternalNotificationIdentity) {
+        if observationAliases[alias] == nil { aliasOrder.append(alias) }
+        observationAliases[alias] = identity
+        while aliasOrder.count > aliasLimit {
+            observationAliases.removeValue(forKey: aliasOrder.removeFirst())
+        }
     }
 }
