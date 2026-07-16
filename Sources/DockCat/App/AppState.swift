@@ -4,6 +4,12 @@ import OSLog
 
 @MainActor
 final class AppState: ObservableObject {
+    private enum InterruptedFlow {
+        case initialPresentation(DockCatNotification)
+        case replacement(DockCatNotification)
+        case dismissal(DockCatNotification)
+    }
+
     @Published private(set) var current: DockCatNotification?
     @Published private(set) var catState: CatState = .sleeping
     @Published var isPaused = false
@@ -16,6 +22,7 @@ final class AppState: ObservableObject {
     private let locator = DockLocator()
     private var flowTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
+    private var interruptedFlow: InterruptedFlow?
     private var screenMonitor: ScreenChangeMonitor?
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
 
@@ -26,7 +33,7 @@ final class AppState: ObservableObject {
         screenMonitor = ScreenChangeMonitor { [weak self] in self?.reposition() }
     }
 
-    func stop() { flowTask?.cancel(); timeoutTask?.cancel(); screenMonitor?.stop(); screenMonitor = nil }
+    func stop() { flowTask?.cancel(); timeoutTask?.cancel(); cardWindow.cancelPresentationAnimation(); screenMonitor?.stop(); screenMonitor = nil }
 
     func sendTest(persistent: Bool = false) {
         submit(.init(sourceName: "DockCat", title: persistent ? "Persistent alert" : "Hello from DockCat",
@@ -58,13 +65,14 @@ final class AppState: ObservableObject {
         Task { await queue.setPaused(paused) }
         if paused {
             timeoutTask?.cancel()
+            cardWindow.cancelPresentationAnimation()
             _ = machine.handle(.pause); catState = machine.state
             catWindow.pause()
         } else {
             _ = machine.handle(.resume); catState = machine.state
             catWindow.resume()
             if let current, machine.state == .waitingForDismissal { scheduleTimeoutIfNeeded(current) }
-            beginFlowIfNeeded()
+            continueFlowIfNeeded()
         }
     }
 
@@ -83,11 +91,75 @@ final class AppState: ObservableObject {
             await transition(.animationCompleted, animation: .pickUp)
             await transition(.animationCompleted, animation: .walkToPresentation)
             _ = machine.handle(.animationCompleted); updateState()
-            cardWindow.show(notification: item, preferences: settings.preferences)
-            _ = machine.handle(.cardPresented); updateState()
-            scheduleTimeoutIfNeeded(item)
-            flowTask = nil
+            await presentInitial(item)
         }
+    }
+
+    private func continueFlowIfNeeded() {
+        guard flowTask == nil, !isPaused else { return }
+        guard let interruptedFlow else { beginFlowIfNeeded(); return }
+        flowTask = Task { [weak self] in
+            guard let self else { return }
+            switch interruptedFlow {
+            case .initialPresentation(let item): await presentInitial(item)
+            case .replacement(let item): await presentReplacement(item)
+            case .dismissal(let item): await finishDismissal(item)
+            }
+        }
+    }
+
+    private func presentInitial(_ item: DockCatNotification) async {
+        catWindow.prepareHandoffPose()
+        let result = await cardWindow.present(notification: item, preferences: settings.preferences, from: catWindow.handoffSourceRect(), reducedMotion: settings.effectiveReducedMotion)
+        guard PresentationChoreography.shouldAcceptPresentationCompletion(result), current?.id == item.id else {
+            let shouldRetry = !Task.isCancelled && current?.id == item.id && (isPaused || machine.state == .presenting)
+            if shouldRetry { interruptedFlow = .initialPresentation(item) }
+            flowTask = nil
+            if shouldRetry { continueFlowIfNeeded() }
+            return
+        }
+        interruptedFlow = nil
+        catWindow.completeHandoffPose()
+        _ = machine.handle(.cardPresented); updateState()
+        scheduleTimeoutIfNeeded(item)
+        flowTask = nil
+    }
+
+    private func presentReplacement(_ item: DockCatNotification) async {
+        let result = await cardWindow.replace(notification: item, preferences: settings.preferences, reducedMotion: settings.effectiveReducedMotion)
+        guard result == .completed, current?.id == item.id else {
+            let shouldRetry = !Task.isCancelled && current?.id == item.id && (isPaused || machine.state == .presenting)
+            if shouldRetry { interruptedFlow = .replacement(item) }
+            flowTask = nil
+            if shouldRetry { continueFlowIfNeeded() }
+            return
+        }
+        interruptedFlow = nil
+        _ = machine.handle(.cardPresented); updateState()
+        scheduleTimeoutIfNeeded(item)
+        flowTask = nil
+    }
+
+    private func finishDismissal(_ item: DockCatNotification) async {
+        let result = await cardWindow.dismissActive(toward: catWindow.handoffSourceRect(), reducedMotion: settings.effectiveReducedMotion)
+        guard result == .completed, current?.id == item.id else {
+            let shouldRetry = !Task.isCancelled && current?.id == item.id && (isPaused || machine.state == .dismissingCard)
+            if shouldRetry { interruptedFlow = .dismissal(item) }
+            flowTask = nil
+            if shouldRetry { continueFlowIfNeeded() }
+            return
+        }
+        interruptedFlow = nil
+        current = nil
+        catWindow.hideCarriedCard()
+        _ = machine.handle(.cardDismissed); updateState()
+        _ = await queue.completeCurrent()
+        await catWindow.animate(.walkHome, speed: settings.preferences.animationSpeed, reducedMotion: settings.effectiveReducedMotion)
+        _ = machine.handle(.animationCompleted); updateState()
+        await catWindow.animate(.settle, speed: settings.preferences.animationSpeed, reducedMotion: settings.effectiveReducedMotion)
+        _ = machine.handle(.animationCompleted); updateState()
+        flowTask = nil
+        beginFlowIfNeeded()
     }
 
     private func transition(_ event: CatEvent, animation: CatAnimation) async {
@@ -106,33 +178,31 @@ final class AppState: ObservableObject {
     }
 
     private func advanceAfterDismissal(event: CatEvent) {
+        guard flowTask == nil || machine.state == .waitingForDismissal else { return }
         guard machine.handle(event) else { return }
-        updateState(); cardWindow.hide(); current = nil
+        updateState()
+        let dismissed = current
         flowTask = Task { [weak self] in
             guard let self else { return }
-            _ = await queue.completeCurrent()
-            if settings.preferences.remainForQueuedMessages, await queue.hasPending(), let next = await queue.next() {
+            if settings.preferences.remainForQueuedMessages, await queue.hasPending() {
+                _ = await queue.completeCurrent()
+                guard let next = await queue.next() else { flowTask = nil; return }
                 current = next
                 _ = machine.handle(.nextNotificationAvailable); updateState()
-                cardWindow.show(notification: next, preferences: settings.preferences)
-                _ = machine.handle(.cardPresented); updateState()
-                scheduleTimeoutIfNeeded(next)
+                await presentReplacement(next)
             } else {
                 _ = machine.handle(.queueEmpty); updateState()
-                await catWindow.animate(.walkHome, speed: settings.preferences.animationSpeed, reducedMotion: settings.effectiveReducedMotion)
-                _ = machine.handle(.animationCompleted); updateState()
-                await catWindow.animate(.settle, speed: settings.preferences.animationSpeed, reducedMotion: settings.effectiveReducedMotion)
-                _ = machine.handle(.animationCompleted); updateState()
+                guard let dismissed else { flowTask = nil; return }
+                await finishDismissal(dismissed)
             }
-            flowTask = nil
-            beginFlowIfNeeded()
+            _ = dismissed
         }
     }
 
     private func updateState() { catState = machine.state; logger.debug("Cat state: \(self.catState.rawValue, privacy: .public)") }
     private func reposition() {
         let geometry = locator.locate(preferences: settings.preferences)
-        catWindow.position(at: geometry.sleepingPoint, presentationPoint: geometry.presentationPoint)
+        catWindow.position(at: geometry.sleepingPoint, presentationPoint: geometry.presentationPoint, dockEdge: geometry.edge)
         cardWindow.position(above: geometry.presentationPoint, offset: settings.preferences.cardOffset)
     }
 }
