@@ -2,7 +2,13 @@ import Foundation
 
 public struct AccessibilityNotificationSnapshot: Sendable, Equatable {
     public enum ObservationKind: String, Sendable, Codable { case created, childrenChanged, layoutChanged, windowCreated, valueChanged, destroyed, unknown }
-    public struct Origin: Sendable, Equatable { public let bundleIdentifier: String?; public let processIdentifier: Int32 }
+    public struct Origin: Sendable, Equatable {
+        public let bundleIdentifier: String?
+        public let processIdentifier: Int32
+        public init(bundleIdentifier: String?, processIdentifier: Int32) {
+            self.bundleIdentifier = bundleIdentifier; self.processIdentifier = processIdentifier
+        }
+    }
     public struct Node: Sendable, Equatable {
         public let role, subrole, identifier, title, value, elementDescription, help: String?
         public let enabled, selected: Bool?

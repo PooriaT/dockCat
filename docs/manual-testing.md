@@ -1,5 +1,18 @@
 # Manual testing
 
+## Accessibility normalization and burst deduplication
+
+1. Enable system notifications, trigger one synthetic notification, and verify multiple AX callbacks produce one DockCat card.
+2. Trigger two notifications from the same app with different invented bodies and verify both appear.
+3. Enable hidden previews and verify no hidden title or body is exposed; only visible source/placeholder information may appear.
+4. Open Notification Center widgets and verify they do not produce cards.
+5. Trigger visible text longer than 512 characters and verify it is safely truncated.
+6. Send developer and `dockcat://notify` events and verify both still enter the queue normally.
+7. Inspect Console output and verify it contains result categories but no notification text.
+8. Generate repeated callbacks for longer than the retention window and verify storage stays at or below 256 digest records.
+
+Lifecycle disappearance, active-card updates, and native-banner dismissal are intentionally left for issue #70.
+
 ## Transient notification
 
 - Send a transient notification and confirm the cat wakes, picks up the mini-card, and carries it during travel.
