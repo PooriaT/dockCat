@@ -8,6 +8,7 @@ public enum CatState: String, Equatable, Sendable {
 public enum CatEvent: Equatable, Sendable {
     case notificationAvailable, animationCompleted, cardPresented
     case transientExpired, userDismissed, nextNotificationAvailable, queueEmpty, cardDismissed
+    case notificationUpdated, sourceDisappeared
     case pause, resume
 }
 
@@ -31,7 +32,9 @@ public struct CatStateMachine: Sendable {
         case (.pickingUpCard, .animationCompleted): next = .walkingToPresentation
         case (.walkingToPresentation, .animationCompleted): next = .presenting
         case (.presenting, .cardPresented): next = .waitingForDismissal
-        case (.waitingForDismissal, .transientExpired), (.waitingForDismissal, .userDismissed): next = .preparingNextNotification
+        case (.waitingForDismissal, .notificationUpdated): next = .presenting
+        case (.waitingForDismissal, .transientExpired), (.waitingForDismissal, .userDismissed),
+             (.waitingForDismissal, .sourceDisappeared): next = .preparingNextNotification
         case (.preparingNextNotification, .nextNotificationAvailable): next = .presenting
         case (.preparingNextNotification, .queueEmpty): next = .dismissingCard
         case (.dismissingCard, .cardDismissed): next = .walkingHome

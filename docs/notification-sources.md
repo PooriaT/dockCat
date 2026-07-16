@@ -23,3 +23,12 @@ The actor-isolated cache defaults to 15 seconds and 256 entries. It removes expi
 The Notification Center process bundle identifies the observer host, not the app that posted a banner, and is therefore never used as the candidate source. A source bundle is accepted only from bundle metadata inside the selected notification subtree; otherwise it remains absent. DockCat's exact derived bundle identifier and known overlay/simulator/URL structural identifiers are excluded. Display name alone is never an exclusion signal. Destroyed observations are rejected before deduplication or queueing. Full appeared/updated/disappeared reconciliation, native dismissal, and persistent presentation policy remain deferred to issue #70.
 
 The health model reports `disabled`, `permissionRequired`, `starting`, `active`, `degraded`, or `unavailable`. `active` requires every attempted structural registration through the preferred bundle identifier; fallback resolution or partial registration is degraded. Permission loss removes registrations and the run-loop source.
+# External notification lifecycle
+
+Internal developer, menu, and URL notifications remain one-shot events. Accessibility observations are instead normalized into `appeared`, `updated`, and `disappeared` events. External identity combines a source namespace with an opaque stable container identifier; visible titles and bodies are never the sole identity and AX objects never cross the source boundary.
+
+Repeated equivalent observations are ignored. Meaningful changes replace a pending item in place or replace the active card without moving the cat. The visible-duration timer restarts only after replacement presentation completes. Explicit removal removes pending work or starts the normal ordered active-card dismissal. Duplicate or out-of-order removals are harmless.
+
+Presentation classification is best effort. A structurally identified simple banner is transient; an alert or item with action controls is persistent. Ambiguous structures are conservatively persistent until their source disappears so important content is not silently lost. This is structural policy, not an application allowlist, and macOS UI changes may reduce its accuracy.
+
+The tracker is capacity bounded and uses a bounded reconciliation age for missing destruction callbacks. Source shutdown or Accessibility permission loss immediately treats every tracked item as disappeared. Internal queue entries are untouched; a restarted source begins with an empty lifecycle set.

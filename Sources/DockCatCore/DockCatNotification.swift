@@ -1,13 +1,8 @@
 import Foundation
 
 public struct DockCatNotification: Identifiable, Equatable, Sendable {
-    public struct ExternalIdentity: Equatable, Sendable {
-        public let fingerprint: String
-        public let sourceBundleIdentifier: String?
-        public init(fingerprint: String, sourceBundleIdentifier: String?) {
-            self.fingerprint = fingerprint; self.sourceBundleIdentifier = sourceBundleIdentifier
-        }
-    }
+    public typealias ExternalIdentity = ExternalNotificationIdentity
+    public enum Classification: Equatable, Sendable { case confident(String), bestEffort(String) }
     public enum Presentation: Equatable, Sendable {
         case transient(duration: TimeInterval)
         case persistent
@@ -22,10 +17,12 @@ public struct DockCatNotification: Identifiable, Equatable, Sendable {
     public let createdAt: Date
     /// Opaque source identity for later lifecycle reconciliation; it contains no notification text.
     public let externalIdentity: ExternalIdentity?
+    public let classification: Classification?
 
     public init(id: UUID = UUID(), sourceName: String, title: String, message: String,
                 presentation: Presentation = .transient(duration: 5), actionURL: URL? = nil,
-                createdAt: Date = Date(), externalIdentity: ExternalIdentity? = nil) {
+                createdAt: Date = Date(), externalIdentity: ExternalIdentity? = nil,
+                classification: Classification? = nil) {
         self.id = id
         self.sourceName = sourceName
         self.title = title
@@ -34,5 +31,6 @@ public struct DockCatNotification: Identifiable, Equatable, Sendable {
         self.actionURL = actionURL
         self.createdAt = createdAt
         self.externalIdentity = externalIdentity
+        self.classification = classification
     }
 }
