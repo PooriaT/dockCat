@@ -14,7 +14,13 @@ final class AppState: ObservableObject {
     @Published private(set) var catState: CatState = .sleeping
     @Published var isPaused = false
     let settings = SettingsStore()
-    lazy var systemNotificationAccess = SystemNotificationAccessController(enabled: settings.preferences.systemNotificationsEnabled)
+    private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
+        eventHandler: { [weak self] event in self?.receive(sourceEvent: event) },
+        outcomeHandler: { [weak self] outcome in self?.systemSourceReported(outcome) }
+    )
+    lazy var systemNotificationAccess = SystemNotificationAccessController(
+        enabled: settings.preferences.systemNotificationsEnabled, source: systemNotificationSource
+    )
 
     private let queue = DockCatCore.NotificationQueue()
     private var machine = CatStateMachine()
@@ -56,6 +62,23 @@ final class AppState: ObservableObject {
             logger.info("Notification received: \(notification.id, privacy: .public), result: \(String(describing: result), privacy: .public)")
             guard result == .accepted, !isPaused else { return }
             beginFlowIfNeeded()
+        }
+    }
+
+    /// Staged source router: candidate AX snapshots deliberately cannot enter the presentation queue.
+    func receive(sourceEvent: NotificationSourceEvent) {
+        switch sourceEvent {
+        case .notification(let notification): submit(notification)
+        case .accessibilitySnapshot: logger.debug("Accessibility candidate accepted for future parsing")
+        }
+    }
+
+    private func systemSourceReported(_ outcome: SystemNotificationAccessibilitySource.Outcome) {
+        switch outcome {
+        case .active: systemNotificationAccess.sourceDidStart()
+        case .degraded: systemNotificationAccess.sourceDidDegrade()
+        case .unavailable: systemNotificationAccess.sourceDidFailToStart()
+        case .permissionRequired: systemNotificationAccess.sourceDidLosePermission()
         }
     }
 

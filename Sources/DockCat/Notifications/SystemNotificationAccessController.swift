@@ -72,7 +72,6 @@ final class SystemNotificationAccessController: ObservableObject {
     func sourceDidDegrade() { guard acceptsSourceCallback else { return }; transition(to: .init(.degraded, reason: .compatibilityProblem)) }
     func sourceDidFailToStart() {
         guard acceptsSourceCallback else { return }
-        startRequested = false
         transition(to: .init(.unavailable, reason: .startupFailed))
     }
     func sourceDidLosePermission() {

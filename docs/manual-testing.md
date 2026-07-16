@@ -32,6 +32,8 @@
 - Enable it without trust and confirm the status is **Accessibility permission required** while Developer test notifications and `dockcat://notify` continue to work.
 - Press **Request Accessibility Permission** and confirm only that explicit action initiates the system-controlled permission flow.
 - Return from System Settings or press **Recheck** and confirm the status updates without relaunching.
-- With trust granted, confirm the status is **Unavailable**, not **Active**, because the observer is deferred to issue #68.
+- With trust granted, enable the source and confirm status truthfully reaches **Active** or **Degraded**.
+- Trigger notifications from several applications and confirm privacy-safe candidate counts increase, but DockCat presents no raw candidate.
+- Restart Notification Center (or log out and back in) when practical and confirm the observer resolves the replacement PID.
 - Revoke permission, reactivate DockCat, and confirm the status returns to permission required with revocation guidance.
-- Disable the source and confirm it remains disabled after relaunch. Confirm native banners are not suppressed.
+- Disable the source and confirm callback counts stop and it remains disabled after relaunch. Confirm native banners are not suppressed and logs contain no notification text.

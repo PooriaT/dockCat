@@ -9,6 +9,8 @@ public struct SystemNotificationSourceHealth: Sendable, Equatable {
         case observerNotImplemented
         case compatibilityProblem
         case startupFailed
+        case processUnavailable
+        case noUsefulNotifications
     }
 
     public let state: State
