@@ -1,11 +1,13 @@
 # Notification sources
 
-All future inputs conform to `NotificationSource`, exposing an identifier plus asynchronous `start(handler:)` and `stop()` methods. The MVP supports developer/UI submissions, menu commands, direct internal service submission, and the custom URL scheme. Those sources never require Accessibility permission.
+All inputs use a typed `NotificationSourceEvent`: existing developer and URL inputs remain normal `DockCatNotification` events, while the experimental Accessibility observer emits neutral candidate snapshots. Candidates terminate at a no-op router until issue #69 and cannot reach the card queue.
 
-A future source must validate at its trust boundary, avoid blocking the main actor, and submit only model values to the queue. No source may invoke presentation or animation directly.
+A source must validate at its trust boundary, avoid blocking the main actor, and submit only model values. No source may invoke presentation or animation directly.
 
 ## Experimental System Notifications onboarding
 
-The disabled-by-default System Notifications setting is independent of DockCat's global enabled state. Enabling it performs only a non-prompting trust check. The macOS Accessibility prompt is requested exclusively by the permission button. A later observer may read visible notification text locally; it is not implemented and third-party notifications are not mirrored in this release. Native banners remain visible because suppression is not implemented.
+The disabled-by-default observer uses only public Accessibility APIs. It resolves `com.apple.notificationcenterui` (plus a small legacy identifier/name fallback), listens for that process launching or terminating, and reattaches after PID replacement. It independently attempts created, children/layout/value changed, window-created, and destroyed callbacks because availability varies by macOS release. Partial registration is degraded; no useful registration is unavailable.
 
-The reusable health model reports `disabled`, `permissionRequired`, `starting`, `active`, `degraded`, or `unavailable`. `active` can only follow startup success reported by a real source. Until issue #68 supplies that source, a trusted configuration reports `unavailable` with an observer-not-implemented reason. Permission loss stops a running/starting source and returns to `permissionRequired`; typed compatibility and startup failures map to `degraded` and `unavailable` respectively.
+Callbacks snapshot the changed element's immediate container rather than the desktop. Bursts are coalesced for 40 ms. Traversal defaults to depth 6, 80 nodes, 512 characters per string, and 8,192 total text characters; cycles and repeated elements are stopped. Snapshot data has no AX references, screenshots, OCR, or inferred hidden content. Issue #69 owns fixture-driven parsing, normalization, semantic deduplication, and lifecycle classification. Later issues own dismissal actions.
+
+The health model reports `disabled`, `permissionRequired`, `starting`, `active`, `degraded`, or `unavailable`. `active` requires every attempted structural registration through the preferred bundle identifier; fallback resolution or partial registration is degraded. Permission loss removes registrations and the run-loop source.

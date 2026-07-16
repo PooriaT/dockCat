@@ -14,7 +14,28 @@ final class AppState: ObservableObject {
     @Published private(set) var catState: CatState = .sleeping
     @Published var isPaused = false
     let settings = SettingsStore()
-    lazy var systemNotificationAccess = SystemNotificationAccessController(enabled: settings.preferences.systemNotificationsEnabled)
+    private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
+        eventHandler: { [weak self] event in self?.receive(sourceEvent: event) },
+        outcomeHandler: { _ in }
+    )
+    lazy var systemNotificationAccess: SystemNotificationAccessController = {
+        let controller = SystemNotificationAccessController(
+            enabled: settings.preferences.systemNotificationsEnabled,
+            source: systemNotificationSource,
+            startImmediately: false
+        )
+        systemNotificationSource.setOutcomeHandler { [weak controller] outcome in
+            guard let controller else { return }
+            switch outcome {
+            case .active: controller.sourceDidStart()
+            case .degraded: controller.sourceDidDegrade()
+            case .unavailable: controller.sourceDidFailToStart()
+            case .permissionRequired: controller.sourceDidLosePermission()
+            }
+        }
+        controller.refresh()
+        return controller
+    }()
 
     private let queue = DockCatCore.NotificationQueue()
     private var machine = CatStateMachine()
@@ -56,6 +77,14 @@ final class AppState: ObservableObject {
             logger.info("Notification received: \(notification.id, privacy: .public), result: \(String(describing: result), privacy: .public)")
             guard result == .accepted, !isPaused else { return }
             beginFlowIfNeeded()
+        }
+    }
+
+    /// Staged source router: candidate AX snapshots deliberately cannot enter the presentation queue.
+    func receive(sourceEvent: NotificationSourceEvent) {
+        switch sourceEvent {
+        case .notification(let notification): submit(notification)
+        case .accessibilitySnapshot: logger.debug("Accessibility candidate accepted for future parsing")
         }
     }
 

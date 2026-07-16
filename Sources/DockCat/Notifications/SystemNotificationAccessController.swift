@@ -19,11 +19,12 @@ final class SystemNotificationAccessController: ObservableObject {
     private var startRequested = false
     private var lastTrust: Bool?
 
-    init(enabled: Bool, trust: AccessibilityTrustChecking = AccessibilityTrustController(), source: SystemNotificationSourceControlling? = nil) {
+    init(enabled: Bool, trust: AccessibilityTrustChecking = AccessibilityTrustController(),
+         source: SystemNotificationSourceControlling? = nil, startImmediately: Bool = true) {
         self.enabled = enabled
         self.trust = trust
         self.source = source
-        refresh()
+        if startImmediately { refresh() }
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -72,7 +73,7 @@ final class SystemNotificationAccessController: ObservableObject {
     func sourceDidDegrade() { guard acceptsSourceCallback else { return }; transition(to: .init(.degraded, reason: .compatibilityProblem)) }
     func sourceDidFailToStart() {
         guard acceptsSourceCallback else { return }
-        startRequested = false
+        stopSource()
         transition(to: .init(.unavailable, reason: .startupFailed))
     }
     func sourceDidLosePermission() {
