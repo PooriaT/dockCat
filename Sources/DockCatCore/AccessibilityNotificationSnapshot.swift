@@ -26,12 +26,15 @@ public struct AccessibilityNotificationSnapshot: Sendable, Equatable {
     public let observationKind: ObservationKind
     public let captureSequence: UInt64
     public let root: Node
+    public let observedElementIdentifier: String?
     public let opaqueDismissalTokenIdentifier: String?
     public let traversalWasTruncated: Bool
     public init(origin: Origin, observationKind: ObservationKind, captureSequence: UInt64, root: Node,
+                observedElementIdentifier: String? = nil,
                 opaqueDismissalTokenIdentifier: String? = nil, traversalWasTruncated: Bool = false) {
         self.origin = origin; self.observationKind = observationKind; self.captureSequence = captureSequence
-        self.root = root; self.opaqueDismissalTokenIdentifier = opaqueDismissalTokenIdentifier
+        self.root = root; self.observedElementIdentifier = observedElementIdentifier
+        self.opaqueDismissalTokenIdentifier = opaqueDismissalTokenIdentifier
         self.traversalWasTruncated = traversalWasTruncated
     }
 }

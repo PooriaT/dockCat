@@ -46,6 +46,8 @@ public enum AccessibilityNotificationRejection: String, Error, Sendable, Equatab
     case unrelatedStructure
     case insufficientVisibleContent
     case hiddenWithoutNotificationStructure
+    case ambiguousNotificationStructure
+    case disappeared
     case excludedOrigin
     case excludedInternalStructure
 }

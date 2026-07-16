@@ -10,6 +10,24 @@ final class AccessibilityNotificationParserTests: XCTestCase {
         XCTAssertEqual(candidate.title.displayValue, "Orbit status")
         XCTAssertEqual(candidate.message.displayValue, "A synthetic task finished.")
         XCTAssertEqual(candidate.structuralKind, .banner)
+        XCTAssertEqual(candidate.sourceBundleIdentifier, "org.example.lab")
+    }
+    func testFieldsAreScopedToObservedNotificationSubtree() throws {
+        let candidate = try parser.parse(AXFixtures.siblingContainer()).get()
+        XCTAssertEqual(candidate.sourceDisplayName.displayValue, "Second Example")
+        XCTAssertEqual(candidate.title.displayValue, "New orbit")
+        XCTAssertEqual(candidate.message.displayValue, "New invented body")
+        XCTAssertEqual(candidate.sourceBundleIdentifier, "org.example.second")
+    }
+    func testAmbiguousSiblingContainerIsSafelyRejected() {
+        let snapshot = AXFixtures.siblingContainer()
+        let ambiguous = AccessibilityNotificationSnapshot(origin: snapshot.origin, observationKind: snapshot.observationKind,
+                                                           captureSequence: snapshot.captureSequence, root: snapshot.root)
+        XCTAssertEqual(parser.parse(ambiguous), .failure(.ambiguousNotificationStructure))
+    }
+    func testNotificationCenterHostIsNotUsedAsSourceBundle() throws {
+        let candidate = try parser.parse(AXFixtures.banner(bundle: nil)).get()
+        XCTAssertNil(candidate.sourceBundleIdentifier)
     }
     func testMissingTitleAndBodyVariantsRemainValid() throws {
         XCTAssertEqual(try parser.parse(AXFixtures.banner(title: nil)).get().title, .missing)

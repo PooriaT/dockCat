@@ -8,10 +8,12 @@ enum AXFixtures {
         if let source { children.append(.init(role: "AXStaticText", identifier: "appName", value: source)) }
         if let title { children.append(.init(role: "AXStaticText", identifier: "title", value: title)) }
         if let body { children.append(.init(role: "AXStaticText", identifier: "message", value: body)) }
+        if let bundle { children.append(.init(role: "AXStaticText", identifier: "sourceBundleIdentifier", value: bundle)) }
         children += extraChildren
-        return .init(origin: .init(bundleIdentifier: bundle, processIdentifier: 42), observationKind: .created,
+        return .init(origin: .init(bundleIdentifier: "com.apple.notificationcenterui", processIdentifier: 42), observationKind: .created,
                      captureSequence: sequence,
-                     root: .init(role: "AXGroup", subrole: "AXNotificationBanner", identifier: "notification.synthetic.1", children: children))
+                     root: .init(role: "AXGroup", subrole: "AXNotificationBanner", identifier: "notification.synthetic.1", children: children),
+                     observedElementIdentifier: "notification.synthetic.1")
     }
     static let alert = banner(extraChildren: [
         .init(role: "AXButton", identifier: "primaryAction", title: "Fortfahren", supportedActions: ["AXPress"]),
@@ -34,4 +36,20 @@ enum AXFixtures {
     static let unknown = AccessibilityNotificationSnapshot(
         origin: .init(bundleIdentifier: "org.example.unknown", processIdentifier: 45), observationKind: .unknown, captureSequence: 4,
         root: .init(role: "AXNovelRole", subrole: "AXNovelSubrole", children: []))
+
+    static func siblingContainer() -> AccessibilityNotificationSnapshot {
+        let older = banner(title: "Older orbit", body: "Older invented body").root
+        let newer = AccessibilityNotificationSnapshot.Node(
+            role: "AXGroup", subrole: "AXNotificationBanner", identifier: "notification.synthetic.2",
+            children: [
+                .init(role: "AXStaticText", identifier: "appName", value: "Second Example"),
+                .init(role: "AXStaticText", identifier: "title", value: "New orbit"),
+                .init(role: "AXStaticText", identifier: "message", value: "New invented body"),
+                .init(role: "AXStaticText", identifier: "sourceBundleIdentifier", value: "org.example.second")
+            ])
+        return .init(origin: .init(bundleIdentifier: "com.apple.notificationcenterui", processIdentifier: 42),
+                     observationKind: .created, captureSequence: 20,
+                     root: .init(role: "AXGroup", identifier: "notificationList", children: [older, newer]),
+                     observedElementIdentifier: "notification.synthetic.2")
+    }
 }

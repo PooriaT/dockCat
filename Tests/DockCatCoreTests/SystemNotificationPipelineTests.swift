@@ -31,4 +31,15 @@ final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
         let count = await queue.count()
         XCTAssertEqual(own, .rejected(.excludedOrigin)); XCTAssertEqual(widget, .rejected(.unrelatedStructure)); XCTAssertEqual(count, 0)
     }
+    func testDestroyedSnapshotNeverEnqueues() async {
+        let queue = NotificationQueue()
+        let pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "com.example.DockCat")
+        let source = AXFixtures.banner()
+        let destroyed = AccessibilityNotificationSnapshot(origin: source.origin, observationKind: .destroyed,
+            captureSequence: source.captureSequence, root: source.root,
+            observedElementIdentifier: source.observedElementIdentifier)
+        let result = await pipeline.ingest(destroyed, transientDuration: 5)
+        let count = await queue.count()
+        XCTAssertEqual(result, .rejected(.disappeared)); XCTAssertEqual(count, 0)
+    }
 }

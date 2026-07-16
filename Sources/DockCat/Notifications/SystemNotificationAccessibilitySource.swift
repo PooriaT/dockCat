@@ -87,8 +87,10 @@ import OSLog
             let candidate = (try? client.element(.parent, of: changed)) ?? changed
             sequence &+= 1
             let kind = Self.kind(notification)
+            let observedIdentifier = try? client.string(.identifier, of: changed)
             let result = AccessibilitySnapshotBuilder(client: client).build(from: candidate,
-                origin: .init(bundleIdentifier: process.bundleIdentifier, processIdentifier: process.processIdentifier), kind: kind, sequence: sequence)
+                origin: .init(bundleIdentifier: process.bundleIdentifier, processIdentifier: process.processIdentifier),
+                kind: kind, sequence: sequence, observedElementIdentifier: observedIdentifier)
             logger.info("AX candidate snapshot count=\(self.sequence, privacy: .public), truncations=\(result.truncatedNodeCount, privacy: .public)")
             eventHandler(.accessibilitySnapshot(result.snapshot))
             pendingSnapshot = nil

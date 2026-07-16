@@ -13,7 +13,12 @@ public struct AccessibilityNotificationParser: Sendable {
     public init(limits: Limits = .init()) { self.limits = limits }
 
     public func parse(_ snapshot: AccessibilityNotificationSnapshot) -> Result<AccessibilityNotificationCandidate, AccessibilityNotificationRejection> {
-        let flattened = flatten(snapshot.root)
+        let subtree: AccessibilityNotificationSnapshot.Node
+        switch notificationSubtree(in: snapshot) {
+        case .success(let node): subtree = node
+        case .failure(let rejection): return .failure(rejection)
+        }
+        let flattened = flatten(subtree)
         let structuralTokens = flattened.flatMap { [$0.node.role, $0.node.subrole, $0.node.identifier].compactMap(normalizedToken) }
         let hasNotificationIdentity = structuralTokens.contains { token in
             token.contains("notification") || token.contains("banner") || token.contains("alert")
@@ -24,6 +29,7 @@ public struct AccessibilityNotificationParser: Sendable {
         let kind: AccessibilityNotificationCandidate.StructuralKind = structuralTokens.contains(where: { $0.contains("banner") }) ? .banner
             : structuralTokens.contains(where: { $0.contains("alert") }) ? .alert : .unknown
         let source = field(in: flattened, identifiers: ["appname", "source", "application"])
+        let sourceBundleIdentifier = bundleIdentifier(in: flattened)
         let title = field(in: flattened, identifiers: ["title", "header"])
         var message = field(in: flattened, identifiers: ["message", "body", "subtitle", "content"])
         let isRedacted = structuralTokens.contains { $0.contains("redacted") || $0.contains("hiddenpreview") || $0.contains("privacyplaceholder") }
@@ -56,7 +62,7 @@ public struct AccessibilityNotificationParser: Sendable {
         case .childrenChanged, .layoutChanged, .valueChanged: lifecycle = .changed
         case .unknown: lifecycle = .unknown
         }
-        return .success(.init(sourceBundleIdentifier: snapshot.origin.bundleIdentifier,
+        return .success(.init(sourceBundleIdentifier: sourceBundleIdentifier,
                               sourceDisplayName: source, title: title, message: message,
                               actions: Array(actions.prefix(limits.actionCount)), structuralKind: kind,
                               lifecycleHint: lifecycle,
@@ -64,6 +70,39 @@ public struct AccessibilityNotificationParser: Sendable {
                                              stableContainerIdentifier: stableID, coarseStructuralSignature: signature,
                                              traversalWasTruncated: snapshot.traversalWasTruncated),
                               opaqueDismissalTokenIdentifier: bounded(snapshot.opaqueDismissalTokenIdentifier)))
+    }
+
+    private func notificationSubtree(in snapshot: AccessibilityNotificationSnapshot) -> Result<AccessibilityNotificationSnapshot.Node, AccessibilityNotificationRejection> {
+        var containers: [(node: AccessibilityNotificationSnapshot.Node, depth: Int)] = []
+        func visit(_ node: AccessibilityNotificationSnapshot.Node, depth: Int) {
+            if isNotificationContainer(node) { containers.append((node, depth)) }
+            node.children.forEach { visit($0, depth: depth + 1) }
+        }
+        visit(snapshot.root, depth: 0)
+        guard !containers.isEmpty else { return .failure(.unrelatedStructure) }
+
+        if let observed = snapshot.observedElementIdentifier {
+            let matches = containers.filter { contains(identifier: observed, in: $0.node) }
+            if let maximumDepth = matches.map(\.depth).max() {
+                let deepest = matches.filter { $0.depth == maximumDepth }
+                guard deepest.count == 1 else { return .failure(.ambiguousNotificationStructure) }
+                return .success(deepest[0].node)
+            }
+        }
+        if isNotificationContainer(snapshot.root) { return .success(snapshot.root) }
+        guard containers.count == 1 else { return .failure(.ambiguousNotificationStructure) }
+        return .success(containers[0].node)
+    }
+
+    private func isNotificationContainer(_ node: AccessibilityNotificationSnapshot.Node) -> Bool {
+        let tokens = [node.role, node.subrole, node.identifier].compactMap(normalizedToken)
+        return tokens.contains { $0.contains("banner") || $0.contains("alert") ||
+            ($0.contains("notification") && !$0.contains("notificationcenter") && !$0.contains("notificationlist")) }
+    }
+
+    private func contains(identifier: String, in node: AccessibilityNotificationSnapshot.Node) -> Bool {
+        if node.identifier == identifier { return true }
+        return node.children.contains { contains(identifier: identifier, in: $0) }
     }
 
     private func flatten(_ root: AccessibilityNotificationSnapshot.Node) -> [(node: AccessibilityNotificationSnapshot.Node, depth: Int)] {
@@ -76,11 +115,22 @@ public struct AccessibilityNotificationParser: Sendable {
     private func field(in nodes: [(node: AccessibilityNotificationSnapshot.Node, depth: Int)], identifiers: [String]) -> AccessibilityNotificationCandidate.VisibleField {
         for item in nodes {
             let token = normalizedToken(item.node.identifier) ?? ""
+            guard !token.contains("bundleidentifier") else { continue }
             guard identifiers.contains(where: token.contains) else { continue }
             if item.node.value != nil { return visible(item.node.value) }
             if item.node.title != nil { return visible(item.node.title) }
         }
         return .missing
+    }
+    private func bundleIdentifier(in nodes: [(node: AccessibilityNotificationSnapshot.Node, depth: Int)]) -> String? {
+        let value = nodes.lazy.compactMap { item -> String? in
+            let token = normalizedToken(item.node.identifier) ?? ""
+            guard token.contains("bundleidentifier") else { return nil }
+            return item.node.value ?? item.node.title
+        }.first
+        guard let value = visible(value).displayValue, value.contains("."),
+              value.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }) else { return nil }
+        return value
     }
     private func visible(_ value: String?) -> AccessibilityNotificationCandidate.VisibleField {
         guard let value else { return .missing }

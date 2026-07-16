@@ -26,6 +26,7 @@ public actor SystemNotificationPipeline {
         case .failure(let rejection): return .rejected(rejection)
         case .success(let value): candidate = value
         }
+        guard candidate.lifecycleHint != .disappeared else { return .rejected(.disappeared) }
         if let rejection = exclusions.rejection(for: candidate) { return .rejected(rejection) }
         let fingerprint = NotificationFingerprint.make(for: candidate)
         let duplicate = await deduplication.observe(fingerprint, metadata: .init(sequence: candidate.capture.sequence))
