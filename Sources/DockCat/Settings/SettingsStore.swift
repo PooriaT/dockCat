@@ -1,3 +1,4 @@
+import DockCatCore
 import AppKit
 import Foundation
 import ServiceManagement

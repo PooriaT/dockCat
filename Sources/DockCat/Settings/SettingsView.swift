@@ -1,3 +1,4 @@
+import DockCatCore
 import AppKit
 import SwiftUI
 
@@ -35,18 +36,87 @@ struct SettingsView: View {
                 Toggle("Open action when requested", isOn: binding(\.clickCardOpensAction))
                 Toggle("Stay at queued messages", isOn: binding(\.remainForQueuedMessages))
             }.padding().tabItem { Label("Notifications", systemImage: "bell") }.tag(2)
+            SystemNotificationsSettingsView(state: state)
+                .padding()
+                .tabItem { Label("System", systemImage: "bell.badge") }
+                .tag(3)
             Form {
                 Slider(value: binding(\.animationSpeed), in: 0.25...3) { Text("Animation speed") }
                 Toggle("Reduced motion", isOn: binding(\.reducedMotion))
                 Toggle("Disable walking", isOn: binding(\.disableWalking))
                 Toggle("Idle breathing", isOn: binding(\.idleAnimation))
-            }.padding().tabItem { Label("Animation", systemImage: "figure.walk") }.tag(3)
-            NotificationSimulatorView(state: state).padding().tabItem { Label("Developer", systemImage: "hammer") }.tag(4)
+            }.padding().tabItem { Label("Animation", systemImage: "figure.walk") }.tag(4)
+            NotificationSimulatorView(state: state).padding().tabItem { Label("Developer", systemImage: "hammer") }.tag(5)
         }
         .frame(width: 560, height: 430)
         .onChange(of: state.settings.preferences) { _, _ in state.refreshPlacement() }
     }
     private func binding<T>(_ keyPath: WritableKeyPath<DockCatPreferences, T>) -> Binding<T> {
         Binding(get: { state.settings.preferences[keyPath: keyPath] }, set: { state.settings.preferences[keyPath: keyPath] = $0 })
+    }
+}
+
+private struct SystemNotificationsSettingsView: View {
+    @ObservedObject var state: AppState
+    @ObservedObject private var access: SystemNotificationAccessController
+
+    init(state: AppState) {
+        self.state = state
+        _access = ObservedObject(wrappedValue: state.systemNotificationAccess)
+    }
+
+    var body: some View {
+        Form {
+            Section("System Notifications (Experimental)") {
+                Toggle("Enable experimental System Notifications", isOn: Binding(
+                    get: { state.settings.preferences.systemNotificationsEnabled },
+                    set: { state.setSystemNotificationsEnabled($0) }
+                ))
+                Label(statusTitle, systemImage: statusIcon)
+                Text(statusDetail).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Accessibility permission") {
+                Text("Accessibility access is needed so a future observer can read visible notification text locally. Permission is never requested automatically.")
+                HStack {
+                    Button("Request Accessibility Permission") { access.requestPermission() }
+                        .disabled(!state.settings.preferences.systemNotificationsEnabled)
+                    Button("Recheck") { access.refresh() }
+                }
+                if access.health.reason == .permissionRevoked {
+                    Text("Permission was revoked. Re-enable DockCat in System Settings, then choose Recheck.")
+                        .foregroundStyle(.orange)
+                }
+            }
+            Section("Limitations") {
+                Text("The observer is not implemented yet, so this source cannot become active. Native notification banners may still appear; suppression is not implemented.")
+            }
+        }
+        .onAppear { access.refresh() }
+    }
+
+    private var statusTitle: String {
+        switch access.health.state {
+        case .disabled: "Disabled"
+        case .permissionRequired: "Accessibility permission required"
+        case .starting: "Starting"
+        case .active: "Active"
+        case .degraded: "Degraded"
+        case .unavailable: "Unavailable"
+        }
+    }
+
+    private var statusDetail: String {
+        switch access.health.reason {
+        case .permissionMissing: "Enable the source, then request permission when you are ready."
+        case .permissionRevoked: "The source has stopped because Accessibility permission is no longer available."
+        case .observerNotImplemented: "Permission is available, but notification observation is deferred to issue #68."
+        case .compatibilityProblem: "The source reported a compatibility problem and may be retried."
+        case .startupFailed: "The source could not start and may be retried."
+        case nil: access.health.state == .disabled ? "This setting is independent from Enable DockCat." : "Source lifecycle status."
+        }
+    }
+
+    private var statusIcon: String {
+        access.health.isHealthy ? "checkmark.circle.fill" : "info.circle"
     }
 }

@@ -13,5 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         urls.forEach { state.receive(url: $0) }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        state.systemNotificationAccess.refresh()
+    }
+
     func applicationWillTerminate(_ notification: Notification) { state.stop() }
 }

@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
     @Published private(set) var catState: CatState = .sleeping
     @Published var isPaused = false
     let settings = SettingsStore()
+    lazy var systemNotificationAccess = SystemNotificationAccessController(enabled: settings.preferences.systemNotificationsEnabled)
 
     private let queue = DockCatCore.NotificationQueue()
     private var machine = CatStateMachine()
@@ -27,13 +28,19 @@ final class AppState: ObservableObject {
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
 
     func start() {
+        systemNotificationAccess.refresh()
         reposition()
         catWindow.showSleeping()
         cardWindow.onDismiss = { [weak self] in self?.dismissCurrent() }
         screenMonitor = ScreenChangeMonitor { [weak self] in self?.reposition() }
     }
 
-    func stop() { flowTask?.cancel(); timeoutTask?.cancel(); cardWindow.cancelPresentationAnimation(); screenMonitor?.stop(); screenMonitor = nil }
+    func stop() { systemNotificationAccess.shutdown(); flowTask?.cancel(); timeoutTask?.cancel(); cardWindow.cancelPresentationAnimation(); screenMonitor?.stop(); screenMonitor = nil }
+
+    func setSystemNotificationsEnabled(_ enabled: Bool) {
+        settings.preferences.systemNotificationsEnabled = enabled
+        systemNotificationAccess.setEnabled(enabled)
+    }
 
     func sendTest(persistent: Bool = false) {
         submit(.init(sourceName: "DockCat", title: persistent ? "Persistent alert" : "Hello from DockCat",
