@@ -50,3 +50,8 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 - Restart Notification Center (or log out and back in) when practical and confirm the observer resolves the replacement PID.
 - Revoke permission, reactivate DockCat, and confirm the status returns to permission required with revocation guidance.
 - Disable the source and confirm callback counts stop and it remains disabled after relaunch. Confirm native banners are not suppressed and logs contain no notification text.
+# External lifecycle checks
+
+With experimental system notifications enabled, verify a simple banner is transient, an action-oriented alert is persistent, and an ambiguous fixture remains until its source disappears. Update visible content and confirm the card changes without cat travel. Remove active and pending native items and confirm ordered active dismissal and pending removal. Revoke Accessibility permission and confirm external cards clear while internal test and URL notifications continue. Queue several items to verify FIFO. Logs must contain identities/outcomes only, never content.
+
+DockCat deliberately does not close or act on the original native notification; native action execution belongs to issue #71.
