@@ -4,6 +4,8 @@ public actor SystemNotificationPipeline {
     public struct DismissalRequest: Sendable, Equatable {
         public let tokenIdentifier: String
         public let sourceBundleIdentifier: String?
+        public let notificationSubtreePath: [Int]
+        public let stableContainerIdentifier: String?
     }
     public enum Result: Sendable, Equatable { case enqueued, updatedCurrent, updatedPending, removedCurrent, removedPending, rejected(AccessibilityNotificationRejection), duplicate, queueFull, notFound }
     private let parser: AccessibilityNotificationParser
@@ -60,7 +62,9 @@ public actor SystemNotificationPipeline {
             if result == .queueFull { _ = await tracker.remove(identity) }
             if [.enqueued, .updatedCurrent, .updatedPending].contains(result),
                let token = snapshot.opaqueDismissalTokenIdentifier {
-                pendingDismissalRequest = .init(tokenIdentifier: token, sourceBundleIdentifier: candidate.sourceBundleIdentifier)
+                pendingDismissalRequest = .init(tokenIdentifier: token, sourceBundleIdentifier: candidate.sourceBundleIdentifier,
+                                                notificationSubtreePath: candidate.capture.notificationSubtreePath,
+                                                stableContainerIdentifier: candidate.capture.stableContainerIdentifier)
             }
             return result
         }

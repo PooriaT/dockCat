@@ -129,7 +129,9 @@ final class AppState: ObservableObject {
                     ))
                     let outcome = nativeBannerDismissalPerformer.perform(
                         token: request.tokenIdentifier, sourceBundleIdentifier: request.sourceBundleIdentifier,
-                        excluded: exclusions, ownBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.example.DockCat"
+                        notificationSubtreePath: request.notificationSubtreePath,
+                        stableContainerIdentifier: request.stableContainerIdentifier, excluded: exclusions,
+                        ownBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.example.DockCat"
                     )
                     logger.info("Native banner dismissal outcome=\(String(describing: outcome), privacy: .public)")
                     if outcome == .permissionRequired { systemNotificationAccess.sourceDidLosePermission() }
