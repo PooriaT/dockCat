@@ -82,6 +82,8 @@ public enum CardPlacementPlanner {
         )
         let sizeWasConstrained = size != requestedSize
         let protected = protectedFrame(for: input)
+        let offset = max(0, input.offset)
+        let requiredSeparation = inset(protected, by: -offset)
         let direction = preferredDirection(for: input.dockEdge)
         let preferred = preferredFrame(
             input: input, size: size, protectedFrame: protected
@@ -89,7 +91,7 @@ public enum CardPlacementPlanner {
         let clampedPreferred = clamp(preferred, to: available)
         let wasClamped = sizeWasConstrained || clampedPreferred != preferred
 
-        guard intersects(clampedPreferred, protected) else {
+        guard intersects(clampedPreferred, requiredSeparation) else {
             return CardPlacementPlan(
                 frame: clampedPreferred,
                 preferredDirection: direction,
@@ -105,9 +107,12 @@ public enum CardPlacementPlanner {
             clampedPreferred: clampedPreferred,
             size: size,
             protectedFrame: protected,
+            offset: offset,
             availableFrame: available
         )
-        if let collisionFree = candidates.first(where: { !intersects($0, protected) }) {
+        if let collisionFree = candidates.first(where: {
+            !intersects($0, requiredSeparation)
+        }) {
             return CardPlacementPlan(
                 frame: collisionFree,
                 preferredDirection: direction,
@@ -205,22 +210,23 @@ public enum CardPlacementPlanner {
         clampedPreferred: Rect,
         size: Size,
         protectedFrame: Rect,
+        offset: Double,
         availableFrame: Rect
     ) -> [Rect] {
         var raw: [Rect] = []
         switch edge {
         case .bottom:
-            raw.append(Rect(x: protectedFrame.minX - size.width, y: clampedPreferred.y, width: size.width, height: size.height))
-            raw.append(Rect(x: protectedFrame.maxX, y: clampedPreferred.y, width: size.width, height: size.height))
-            raw.append(Rect(x: preferred.x, y: protectedFrame.minY - size.height, width: size.width, height: size.height))
+            raw.append(Rect(x: protectedFrame.minX - offset - size.width, y: clampedPreferred.y, width: size.width, height: size.height))
+            raw.append(Rect(x: protectedFrame.maxX + offset, y: clampedPreferred.y, width: size.width, height: size.height))
+            raw.append(Rect(x: preferred.x, y: protectedFrame.minY - offset - size.height, width: size.width, height: size.height))
         case .left:
-            raw.append(Rect(x: clampedPreferred.x, y: protectedFrame.minY - size.height, width: size.width, height: size.height))
-            raw.append(Rect(x: clampedPreferred.x, y: protectedFrame.maxY, width: size.width, height: size.height))
-            raw.append(Rect(x: protectedFrame.minX - size.width, y: preferred.y, width: size.width, height: size.height))
+            raw.append(Rect(x: clampedPreferred.x, y: protectedFrame.minY - offset - size.height, width: size.width, height: size.height))
+            raw.append(Rect(x: clampedPreferred.x, y: protectedFrame.maxY + offset, width: size.width, height: size.height))
+            raw.append(Rect(x: protectedFrame.minX - offset - size.width, y: preferred.y, width: size.width, height: size.height))
         case .right:
-            raw.append(Rect(x: clampedPreferred.x, y: protectedFrame.minY - size.height, width: size.width, height: size.height))
-            raw.append(Rect(x: clampedPreferred.x, y: protectedFrame.maxY, width: size.width, height: size.height))
-            raw.append(Rect(x: protectedFrame.maxX, y: preferred.y, width: size.width, height: size.height))
+            raw.append(Rect(x: clampedPreferred.x, y: protectedFrame.minY - offset - size.height, width: size.width, height: size.height))
+            raw.append(Rect(x: clampedPreferred.x, y: protectedFrame.maxY + offset, width: size.width, height: size.height))
+            raw.append(Rect(x: protectedFrame.maxX + offset, y: preferred.y, width: size.width, height: size.height))
         }
         raw.append(contentsOf: [
             Rect(x: availableFrame.minX, y: availableFrame.minY, width: size.width, height: size.height),

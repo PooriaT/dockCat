@@ -44,6 +44,34 @@ final class PlacementRefreshControllerTests: XCTestCase {
         XCTAssertTrue(home.motionWasRetargeted)
     }
 
+    func testOutboundDockEdgeChangeUsesDestinationExclusionAndLiveHandoffSeparately() {
+        let controller = CatWindowController()
+        let initial = makePlacement(
+            sleeping: CGPoint(x: 240, y: 180),
+            presentation: CGPoint(x: 500, y: 180)
+        )
+        _ = controller.updatePlacement(initial, logicalState: .home, sessionID: nil)
+        let sessionID = PresentationSessionID(generation: 1, notificationID: UUID())
+        let changed = makePlacement(
+            sleeping: CGPoint(x: 320, y: 240),
+            presentation: CGPoint(x: 710, y: 240),
+            edge: .left
+        )
+
+        _ = controller.updatePlacement(
+            changed, logicalState: .travellingToPresentation, sessionID: sessionID
+        )
+
+        XCTAssertEqual(
+            controller.presentationExclusionFrame(),
+            CGRect(x: 734, y: 266, width: 36, height: 24)
+        )
+        XCTAssertEqual(
+            controller.handoffSourceRect(),
+            CGRect(x: 264, y: 206, width: 36, height: 24)
+        )
+    }
+
     func testActiveCardPlacementRebasePreservesOperationAndDoesNotDismiss() async {
         let controller = CardWindowController()
         let notification = DockCatNotification(sourceName: "test", title: "", message: "")

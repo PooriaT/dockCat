@@ -84,8 +84,24 @@ final class CardPlacementPlannerTests: XCTestCase {
             anchor: Point(x: 500, y: 760),
             cat: Rect(x: 480, y: 740, width: 40, height: 40)
         )
-        XCTAssertEqual(result.frame, Rect(x: 132, y: 640, width: 340, height: 150))
+        XCTAssertEqual(result.frame, Rect(x: 118, y: 640, width: 340, height: 150))
+        XCTAssertEqual(472 - result.frame.maxX, 14)
         XCTAssertTrue(result.wasClamped)
+        XCTAssertTrue(result.usedCollisionFallback)
+        XCTAssertEqual(result.degradation, .none)
+    }
+
+    func testOppositeSideCollisionFallbackPreservesConfiguredOffset() {
+        let result = plan(
+            edge: .bottom,
+            anchor: Point(x: 200, y: 760),
+            visible: Rect(x: 0, y: 0, width: 400, height: 800),
+            cat: Rect(x: 180, y: 740, width: 40, height: 40),
+            offset: 37
+        )
+
+        XCTAssertEqual(result.frame, Rect(x: 30, y: 545, width: 340, height: 150))
+        XCTAssertEqual(732 - result.frame.maxY, 37)
         XCTAssertTrue(result.usedCollisionFallback)
         XCTAssertEqual(result.degradation, .none)
     }
