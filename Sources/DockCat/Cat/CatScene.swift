@@ -13,6 +13,7 @@ final class CatScene: SKScene {
     private var frontPaw: SKShapeNode?
     private let orange = SKColor(red: 0.94, green: 0.49, blue: 0.16, alpha: 1)
     private let darkOrange = SKColor(red: 0.55, green: 0.23, blue: 0.08, alpha: 1)
+    private var animationContinuations: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -121,11 +122,42 @@ final class CatScene: SKScene {
     }
 
     func runAsync(_ animation: CatAnimation, duration: TimeInterval, reducedMotion: Bool) async {
+        let operationID = UUID()
         await withCheckedContinuation { continuation in
-            run(animation, duration: duration, reducedMotion: reducedMotion) {
-                continuation.resume()
+            animationContinuations[operationID] = continuation
+            run(animation, duration: duration, reducedMotion: reducedMotion) { [weak self] in
+                self?.finishAnimation(operationID)
             }
         }
+    }
+
+    /// Cancels every visual operation and resolves its waiter. Resolving waiters is required
+    /// so recovery cannot strand a flow task in a continuation.
+    func cancelAnimations() {
+        cat.removeAllActions()
+        card.removeAllActions()
+        tail?.removeAllActions()
+        frontPaw?.removeAllActions()
+        hindPaw?.removeAllActions()
+        let continuations = Array(animationContinuations.values)
+        animationContinuations.removeAll()
+        continuations.forEach { $0.resume() }
+    }
+
+    func resetToSleeping() {
+        cancelAnimations()
+        hideMiniCard()
+        stopWalkLoop()
+        body.yScale = 1
+        head.position = CGPoint(x: 31, y: 14)
+        cat.position = CGPoint(x: size.width / 2 - 3, y: 34)
+        cat.setScale(1)
+        cat.zRotation = 0
+        playLoop()
+    }
+
+    private func finishAnimation(_ operationID: UUID) {
+        animationContinuations.removeValue(forKey: operationID)?.resume()
     }
 
     func stopLocomotion(cancelled: Bool, context: CatAnimationContext?) {

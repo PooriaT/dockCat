@@ -39,6 +39,16 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 
 - Pause, disable, stop, or otherwise cancel during card presentation and confirm stale animation completion does not show, dismiss, or overwrite a later notification.
 
+## Effect-driven transitions and recovery
+
+- Send an internal transient notification and confirm the complete wake, pickup, travel, presentation, timeout, card dismissal, return, settle, and sleep flow.
+- Send an internal persistent notification and confirm it waits for close before ordered dismissal and return.
+- Queue three notifications with stay-in-place enabled and confirm each replacement remains at the presentation anchor.
+- Update an active external item and confirm replacement; remove it and confirm ordered card dismissal before return home.
+- Pause during travel and during card animation, then resume and confirm the prior state/effect continues.
+- Through a debug-only test seam, submit an invalid event and confirm no later effect runs, stale DockCat UI is hidden, the cat resets to sleeping, and a later notification can present.
+- Inspect transition and recovery logs. They may contain states, events, effect categories, reasons, and identifiers, but no title, body, AX text, or card content.
+
 ## Experimental System Notifications onboarding
 
 - With fresh preferences, open the System tab and confirm the experimental source is disabled and no Accessibility prompt appears.

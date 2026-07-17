@@ -11,6 +11,7 @@ public actor NotificationQueue {
     private var current: DockCatNotification?
     private var knownIDs: Set<UUID> = []
     private var paused = false
+    private var pauseRevision: UInt = 0
     public var limit: Int
 
     public init(limit: Int = 20) { self.limit = max(1, limit) }
@@ -62,7 +63,18 @@ public actor NotificationQueue {
     }
 
     public func setLimit(_ value: Int) { limit = max(1, value) }
-    public func setPaused(_ value: Bool) { paused = value }
+    public func setPaused(_ value: Bool) {
+        pauseRevision &+= 1
+        paused = value
+    }
+
+    /// Applies coordinator pause state only when it is at least as recent as the last write.
+    /// The revision check lives inside the actor so stale tasks cannot become observable.
+    public func setPaused(_ value: Bool, revision: UInt) {
+        guard revision >= pauseRevision else { return }
+        pauseRevision = revision
+        paused = value
+    }
     public func isPaused() -> Bool { paused }
     public func hasPending() -> Bool { !pending.isEmpty }
     public func count() -> Int { pending.count + (current == nil ? 0 : 1) }
