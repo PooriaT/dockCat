@@ -82,6 +82,21 @@ preferences as one cat-and-card transaction. Refresh policy is state specific:
 - Recovery and global disable may accept newer anchors for their eventual reset, but never
   restart or relocate active visual work; their existing fail-closed policy owns the reset.
 
+`DisplayCatalog` is the single screen-parameter observer and converts `NSScreen` values into
+Foundation-only descriptors. Identity prefers the public ColorSync/CoreGraphics display UUID,
+then a SHA-256 hash of public vendor/model/serial/built-in metadata, then a clearly temporary
+current-display-ID token. Localized names are display copy and legacy migration aliases only.
+Public identity remains imperfect for some adapters and displays that expose incomplete data.
+
+Automatic selection chooses the main display on first resolution and retains that runtime
+identity while connected. If it disappears, automatic falls back to the main display (or the
+first descriptor in deterministic geometry/name/identity order) and does not jump back during
+the process run. Pointer movement is never an input. Main-display mode follows the current main
+display. A missing specific selection remains persisted while runtime placement uses the retained
+valid display, current main display, or deterministic first display. If the specific display
+reconnects, restoration is immediate while home/sleeping and deferred during active presentation;
+the transition back is applied after that session reaches sleeping.
+
 `DockLocator` returns no placement when AppKit has no screen. `AppState` then retains the
 last valid anchors and current overlay frames—never a synthetic zero coordinate—and applies
 the next valid resolution when a screen returns. Before the first valid placement, the cat
@@ -89,11 +104,31 @@ stays unordered and notification claiming waits; the first valid geometry establ
 sleeping overlay before queued delivery begins. Falling back from a missing selected screen
 to an available screen is recorded without logging screen descriptions.
 
+Dock geometry confidence distinguishes an observed visible-frame inset, the nonzero auto-hide
+fallback estimate, and an ambiguous estimate. These values describe public-API evidence; they do
+not imply exact Dock-end detection. Base anchors continue to consume the legacy global distance
+and Trash-side offsets once. A bounded calibration is then applied in logical Dock coordinates:
+`alongDock` is x for a bottom Dock and y for side Docks; positive `awayFromDock` is up for bottom,
+right for left, and left for right. Home and presentation values are stored independently in a
+deterministically ordered record array keyed by stable identity and Dock edge.
+
+The Position tab edits only the current resolved display/edge record. Its two labelled preview
+panels are transparent, nonactivating, click-through, screen-clamped, and independent of the cat,
+card, queue, notification model, presentation coordinator, and timers. Preview ends when Settings
+closes, DockCat disables or terminates, no display resolves, or a selected display disappears.
+
+Preference decoding accepts the legacy `"automatic"`, `"main"`, decimal screen-number, and
+localized-name strings. Number/name aliases migrate only when they identify one connected display;
+otherwise the legacy request is preserved and runtime fallback remains safe. The next SettingsStore
+save uses only the typed selection model. Calibration entries decode lossily so one corrupt or future
+record does not invalidate unrelated preferences, duplicate display/edge records resolve last-wins,
+and encoded record order is deterministic. Existing global offsets remain base inputs and are not
+re-applied as calibration.
+
 Geometry refresh has its own privacy-safe revision and does not submit a state-machine
 event, claim/complete a queue item, change the projected notification, create a presentation
 session, or restart transient timing. Card placement consumes the same revision and selected
-screen geometry; stable display identity, selection policy, calibration, and previews remain
-issue #79.
+screen geometry.
 
 ## Notification card placement
 
@@ -123,8 +158,6 @@ AppKit screen selection is not repeated in the card controller.
   replacement, and dismissal transactions rebase against newer revisions before accepting
   completion. Hidden panels only store context, and geometry updates never call `onDismiss`.
 
-Stable display identity, automatic-display selection refinements, Dock calibration, and
-placement previews remain deferred to issue #79.
 # External lifecycle reconciliation
 
 `ExternalNotificationLifecycleTracker` serializes bounded visible-item state and emits typed lifecycle events. `ExternalPresentationPolicy` deterministically maps structural evidence to best-effort presentation behavior. `NotificationQueue` remains the atomic owner of pending/current items and supports identity-based update, removal, and location while preserving DockCat UUIDs and pending FIFO order.

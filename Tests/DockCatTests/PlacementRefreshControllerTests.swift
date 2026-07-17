@@ -299,11 +299,17 @@ final class PlacementRefreshControllerTests: XCTestCase {
         .init(
             sleepingPoint: sleeping,
             presentationPoint: presentation,
+            baseSleepingPoint: sleeping,
+            basePresentationPoint: presentation,
             edge: edge,
+            geometryConfidence: .observedVisibleFrameInset,
             screenFrame: CGRect(x: 0, y: 0, width: 1_440, height: 900),
             visibleScreenFrame: CGRect(x: 0, y: 24, width: 1_440, height: 876),
-            displayIdentifier: "test-display",
-            usedDisplayFallback: false
+            displayIdentity: .init(value: "test-display", quality: .stableUUID),
+            displayName: "Test Display",
+            requestedDisplayAvailable: true,
+            usedDisplayFallback: false,
+            migratedSelection: nil
         )
     }
 
