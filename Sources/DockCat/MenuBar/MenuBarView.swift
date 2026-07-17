@@ -10,6 +10,7 @@ struct MenuBarView: View {
         Button("Send Test Persistent Notification") { state.sendTest(persistent: true) }
         Divider()
         Button(state.isPaused ? "Resume DockCat" : "Pause DockCat") { state.setPaused(!state.isPaused) }
+            .disabled(state.isPauseTransitioning)
         Text("Cat: \(state.catState.rawValue)").font(.caption)
         Divider()
         Button("Quit DockCat") { NSApp.terminate(nil) }

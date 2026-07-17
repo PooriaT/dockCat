@@ -11,6 +11,7 @@ struct SettingsView: View {
             Form {
                 Toggle("Enable DockCat", isOn: binding(\.enabled))
                 Toggle("Pause DockCat", isOn: Binding(get: { state.isPaused }, set: { state.setPaused($0) }))
+                    .disabled(state.isPauseTransitioning)
                 Toggle("Show menu-bar icon", isOn: $menuBarVisible)
                 Toggle("Launch at login", isOn: Binding(get: { state.settings.launchAtLogin }, set: { enabled in state.settings.setLaunchAtLogin(enabled) }))
                 if let error = state.settings.loginItemError { Text(error).foregroundStyle(.red).font(.caption) }

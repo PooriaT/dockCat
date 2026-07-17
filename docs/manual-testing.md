@@ -30,6 +30,13 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 - Queue three transient notifications with stay-in-place enabled and confirm card content transitions in place without walk-home, settle, sleep, or panel flashing.
 - Confirm each timeout starts after its own replacement completes.
 - Disable stay-in-place and confirm each card dismisses before the cat returns home between notifications.
+- Pause while idle, enqueue several notifications, and confirm none presents until resume.
+- Pause while a card is visible, enqueue more notifications, then resume and confirm the visible card remains authoritative before FIFO delivery continues.
+- Toggle pause/resume rapidly from both Settings and the menu bar. Confirm controls disable during an actor transition and the final published state, visuals, and queue behavior match the final request.
+- Update an active external notification and confirm replacement uses the updated payload without duplicate presentation.
+- Remove active and pending external notifications. Confirm active removal follows ordered card dismissal/replacement and pending removal never presents.
+- Change the queue limit while items are present. Existing items must remain ordered; only later admissions use the new limit.
+- Inspect queue and transition logs. They may include UUIDs, revisions, counts, limits, and outcome categories, but never notification content.
 
 ## Reduced Motion
 

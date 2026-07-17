@@ -7,7 +7,44 @@ public actor SystemNotificationPipeline {
         public let notificationSubtreePath: [Int]
         public let stableContainerIdentifier: String?
     }
-    public enum Result: Sendable, Equatable { case enqueued, updatedCurrent, updatedPending, removedCurrent, removedPending, rejected(AccessibilityNotificationRejection), duplicate, queueFull, notFound }
+    public struct Result: Sendable, Equatable {
+        public enum Kind: Sendable, Equatable {
+            case enqueued
+            case updatedCurrent
+            case updatedPending
+            case removedCurrent
+            case removedPending
+            case rejected(AccessibilityNotificationRejection)
+            case duplicate
+            case queueFull
+            case notFound
+        }
+
+        public let kind: Kind
+        /// The complete actor decision, when this result reached the queue.
+        public let queueMutation: NotificationQueue.ExternalMutationResult?
+
+        public init(kind: Kind, queueMutation: NotificationQueue.ExternalMutationResult? = nil) {
+            self.kind = kind
+            self.queueMutation = queueMutation
+        }
+
+        public static let enqueued = Self(kind: .enqueued)
+        public static let updatedCurrent = Self(kind: .updatedCurrent)
+        public static let updatedPending = Self(kind: .updatedPending)
+        public static let removedCurrent = Self(kind: .removedCurrent)
+        public static let removedPending = Self(kind: .removedPending)
+        public static let duplicate = Self(kind: .duplicate)
+        public static let queueFull = Self(kind: .queueFull)
+        public static let notFound = Self(kind: .notFound)
+        public static func rejected(_ rejection: AccessibilityNotificationRejection) -> Self {
+            .init(kind: .rejected(rejection))
+        }
+
+        /// Category equality preserves the source-compatible result checks while callers
+        /// that coordinate UI consume `queueMutation` rather than issuing another query.
+        public static func == (lhs: Self, rhs: Self) -> Bool { lhs.kind == rhs.kind }
+    }
     private let parser: AccessibilityNotificationParser
     private let exclusions: AccessibilityNotificationExclusionPolicy
     private let tracker: ExternalNotificationLifecycleTracker
@@ -59,7 +96,7 @@ public actor SystemNotificationPipeline {
         case .unsupportedOrdering: return .queueFull
         case .event(let event):
             let result = await apply(event)
-            if result == .queueFull { _ = await tracker.remove(identity) }
+            if result.kind == .queueFull { _ = await tracker.remove(identity) }
             if [.enqueued, .updatedCurrent, .updatedPending].contains(result),
                let token = snapshot.opaqueDismissalTokenIdentifier {
                 pendingDismissalRequest = .init(tokenIdentifier: token, sourceBundleIdentifier: candidate.sourceBundleIdentifier,
@@ -98,11 +135,18 @@ public actor SystemNotificationPipeline {
         case .disappeared(let identity): outcome = await queue.removeExternal(identity)
         default: return .notFound
         }
+        let kind: Result.Kind
         switch outcome {
-        case .inserted: return .enqueued; case .updatedCurrent: return .updatedCurrent; case .updatedPending: return .updatedPending
-        case .removedCurrent: return .removedCurrent; case .removedPending: return .removedPending; case .duplicate: return .duplicate
-        case .full: return .queueFull; case .notFound: return .notFound
+        case .inserted: kind = .enqueued
+        case .updatedCurrent: kind = .updatedCurrent
+        case .updatedPending: kind = .updatedPending
+        case .unchangedCurrent, .unchangedPending, .duplicate: kind = .duplicate
+        case .removedCurrent: kind = .removedCurrent
+        case .removedPending: kind = .removedPending
+        case .full: kind = .queueFull
+        case .notFound: kind = .notFound
         }
+        return .init(kind: kind, queueMutation: outcome)
     }
 
     private func identity(for candidate: AccessibilityNotificationCandidate,

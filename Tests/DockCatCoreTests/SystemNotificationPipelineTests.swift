@@ -7,20 +7,20 @@ final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
         let pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "com.example.DockCat")
         let accepted = await pipeline.ingest(AXFixtures.banner(sequence: 1), transientDuration: 7)
         let duplicate = await pipeline.ingest(AXFixtures.banner(sequence: 2), transientDuration: 7)
-        let initialCount = await queue.count()
+        let initialCount = await queue.snapshot().count
         XCTAssertEqual(accepted, .enqueued); XCTAssertEqual(duplicate, .duplicate); XCTAssertEqual(initialCount, 1)
         let internalItem = DockCatNotification(sourceName: "Simulator", title: "Synthetic", message: "Direct event")
-        let internalResult = await queue.enqueue(internalItem), total = await queue.count()
-        XCTAssertEqual(internalResult, .accepted); XCTAssertEqual(total, 2)
-        let first = await queue.next()
-        XCTAssertEqual(first?.presentation, .transient(duration: 7)); XCTAssertNil(first?.actionURL)
-        XCTAssertNotNil(first?.externalIdentity)
+        let internalResult = await queue.enqueue(internalItem), total = await queue.snapshot().count
+        XCTAssertTrue(internalResult.wasAccepted); XCTAssertEqual(total, 2)
+        guard case .promoted(let first, _) = await queue.claimNext() else { return XCTFail("Expected claim") }
+        XCTAssertEqual(first.presentation, .transient(duration: 7)); XCTAssertNil(first.actionURL)
+        XCTAssertNotNil(first.externalIdentity)
     }
     func testQueueFullRollsBackDeduplicationReservation() async {
         let queue = DockCatCore.NotificationQueue(limit: 1); _ = await queue.enqueue(.init(sourceName: "Internal", title: "", message: "Invented"))
         let pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "com.example.DockCat")
         let full = await pipeline.ingest(AXFixtures.banner(), transientDuration: 5); XCTAssertEqual(full, .queueFull)
-        _ = await queue.next(); _ = await queue.completeCurrent()
+        _ = await queue.claimNext(); _ = await queue.completeCurrent(policy: .leavePendingForLater)
         let retried = await pipeline.ingest(AXFixtures.banner(sequence: 2), transientDuration: 5); XCTAssertEqual(retried, .enqueued)
     }
     func testSelfOriginAndWidgetNeverReachQueue() async {
@@ -28,7 +28,7 @@ final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
         let pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "com.example.DockCat")
         let own = await pipeline.ingest(AXFixtures.banner(bundle: "com.example.DockCat"), transientDuration: 5)
         let widget = await pipeline.ingest(AXFixtures.widget, transientDuration: 5)
-        let count = await queue.count()
+        let count = await queue.snapshot().count
         XCTAssertEqual(own, .rejected(.excludedOrigin)); XCTAssertEqual(widget, .rejected(.unrelatedStructure)); XCTAssertEqual(count, 0)
     }
     func testDestroyedSnapshotNeverEnqueues() async {
@@ -39,7 +39,7 @@ final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
             captureSequence: source.captureSequence, root: source.root,
             observedElementIdentifier: source.observedElementIdentifier)
         let result = await pipeline.ingest(destroyed, transientDuration: 5)
-        let count = await queue.count()
+        let count = await queue.snapshot().count
         XCTAssertEqual(result, .rejected(.disappeared)); XCTAssertEqual(count, 0)
     }
 
@@ -55,7 +55,7 @@ final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
         let queue = DockCatCore.NotificationQueue(), pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "dockcat")
         let first = await pipeline.ingest(snapshot(sequence: 1, observed: "leaf.a", body: "First"), transientDuration: 5); XCTAssertEqual(first, .enqueued)
         let second = await pipeline.ingest(snapshot(sequence: 2, observed: "leaf.b", body: "Second"), transientDuration: 5); XCTAssertEqual(second, .enqueued)
-        let count = await queue.count(); XCTAssertEqual(count, 2)
+        let count = await queue.snapshot().count; XCTAssertEqual(count, 2)
     }
 
     func testFallbackIdentityIgnoresPerCallbackDismissalToken() async {
@@ -72,17 +72,26 @@ final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
         let repeated = await pipeline.ingest(snapshot(sequence: 2, token: "uuid-2"), transientDuration: 5)
         XCTAssertEqual(first, .enqueued)
         XCTAssertEqual(repeated, .duplicate)
-        let count = await queue.count(); XCTAssertEqual(count, 1)
+        let count = await queue.snapshot().count; XCTAssertEqual(count, 1)
     }
 
     func testDescendantDestructionUsesParserSelectedContainerIdentity() async {
         let queue = DockCatCore.NotificationQueue(), pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "dockcat")
         let appeared = AXFixtures.banner()
         let insert = await pipeline.ingest(appeared, transientDuration: 5); XCTAssertEqual(insert, .enqueued)
+        guard case .inserted(_, let insertedIndex, let insertedRevision) = insert.queueMutation else {
+            return XCTFail("Pipeline must preserve the atomic queue insertion outcome")
+        }
+        XCTAssertEqual(insertedIndex, 0)
         let destroyed = AccessibilityNotificationSnapshot(
             origin: appeared.origin, observationKind: .destroyed, captureSequence: 2, root: appeared.root,
             observedElementIdentifier: "message")
         let removal = await pipeline.ingest(destroyed, transientDuration: 5); XCTAssertEqual(removal, .removedPending)
-        let finalCount = await queue.count(); XCTAssertEqual(finalCount, 0)
+        guard case .removedPending(_, let removedIndex, let removedRevision) = removal.queueMutation else {
+            return XCTFail("Pipeline must preserve the atomic queue removal outcome")
+        }
+        XCTAssertEqual(removedIndex, 0)
+        XCTAssertGreaterThan(removedRevision, insertedRevision)
+        let finalCount = await queue.snapshot().count; XCTAssertEqual(finalCount, 0)
     }
 }

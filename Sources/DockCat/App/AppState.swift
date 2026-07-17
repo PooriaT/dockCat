@@ -20,9 +20,20 @@ final class AppState: ObservableObject {
         }
     }
 
+    private struct DeferredExternalUpdate {
+        let notification: DockCatNotification
+        let revision: NotificationQueueRevision
+    }
+
+    private struct DeferredExternalRemoval {
+        let notification: DockCatNotification
+        let revision: NotificationQueueRevision
+    }
+
     @Published private(set) var current: DockCatNotification?
     @Published private(set) var catState: CatState = .sleeping
-    @Published var isPaused = false
+    @Published private(set) var isPaused = false
+    @Published private(set) var isPauseTransitioning = false
     let settings = SettingsStore()
     private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
         dismissalRegistry: accessibilityElementRegistry,
@@ -61,13 +72,15 @@ final class AppState: ObservableObject {
     private var flowTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
+    private var pauseTransitionTask: Task<Void, Never>?
     private var isRecovering = false
     private var recoveryGate = CatRecoveryGate()
-    private var pauseRevision: UInt = 0
-    private var synchronizedPauseRevision: UInt = 0
+    private var requestedPauseState = false
+    private var observedQueueRevision: NotificationQueueRevision = 0
     private var lifecycleReconciliationTask: Task<Void, Never>?
-    private var deferredExternalUpdates = Set<ExternalNotificationIdentity>()
-    private var deferredExternalDisappearances = Set<ExternalNotificationIdentity>()
+    private var deferredExternalUpdates: [ExternalNotificationIdentity: DeferredExternalUpdate] = [:]
+    private var deferredExternalDisappearances: [ExternalNotificationIdentity: DeferredExternalRemoval] = [:]
+    private var dismissingNotification: DockCatNotification?
     private var interruptedFlow: InterruptedFlow?
     private var screenMonitor: ScreenChangeMonitor?
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
@@ -83,17 +96,17 @@ final class AppState: ObservableObject {
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled, let self else { return }
                 let outcomes = await systemNotificationPipeline.reconcile()
-                if outcomes.contains(.removedCurrent) { dismissSourceCurrent() }
+                for outcome in outcomes { self.applyExternalMutation(outcome.queueMutation) }
             }
         }
     }
 
-    func stop() { clearExternalNotifications(); systemNotificationAccess.shutdown(); flowTask?.cancel(); timeoutTask?.cancel(); recoveryTask?.cancel(); lifecycleReconciliationTask?.cancel(); lifecycleReconciliationTask = nil; cardWindow.cancelPresentationAnimation(); screenMonitor?.stop(); screenMonitor = nil }
+    func stop() { clearExternalNotifications(); systemNotificationAccess.shutdown(); flowTask?.cancel(); timeoutTask?.cancel(); recoveryTask?.cancel(); pauseTransitionTask?.cancel(); lifecycleReconciliationTask?.cancel(); lifecycleReconciliationTask = nil; cardWindow.cancelPresentationAnimation(); screenMonitor?.stop(); screenMonitor = nil }
 
     private func clearExternalNotifications() {
         Task {
             let outcomes = await systemNotificationPipeline.sourceStopped()
-            if outcomes.contains(.removedCurrent) { dismissSourceCurrent() }
+            for outcome in outcomes { applyExternalMutation(outcome.queueMutation) }
         }
     }
 
@@ -112,10 +125,11 @@ final class AppState: ObservableObject {
     func submit(_ notification: DockCatNotification) {
         guard settings.preferences.enabled else { return }
         Task {
-            await queue.setLimit(settings.preferences.queueLimit)
+            observeQueueRevision((await queue.setLimit(settings.preferences.queueLimit)).revision)
             let result = await queue.enqueue(notification)
             logger.info("Notification received: \(notification.id, privacy: .public), result: \(String(describing: result), privacy: .public)")
-            guard result == .accepted, !isPaused else { return }
+            _ = observeQueueRevision(result.revision)
+            guard result.wasAccepted else { return }
             beginFlowIfNeeded()
         }
     }
@@ -123,13 +137,13 @@ final class AppState: ObservableObject {
     func receive(sourceEvent: NotificationSourceEvent) {
         switch sourceEvent {
         case .notification(let notification), .oneShot(let notification): submit(notification)
-        case .appeared(let external): submit(external.notification)
+        case .appeared(let external): handleExternalAppearance(external.notification)
         case .updated(let external): handleExternalUpdate(external.notification)
         case .disappeared(let identity): handleExternalDisappearance(identity)
         case .accessibilitySnapshot(let snapshot):
             guard settings.preferences.enabled else { return }
             Task {
-                await queue.setLimit(settings.preferences.queueLimit)
+                observeQueueRevision((await queue.setLimit(settings.preferences.queueLimit)).revision)
                 let result = await systemNotificationPipeline.ingest(
                     snapshot, transientDuration: settings.preferences.defaultTransientDuration
                 )
@@ -149,64 +163,104 @@ final class AppState: ObservableObject {
                     logger.info("Native banner dismissal outcome=\(String(describing: outcome), privacy: .public)")
                     if outcome == .permissionRequired { systemNotificationAccess.sourceDidLosePermission() }
                 }
-                guard !isPaused else { return }
-                switch result {
-                case .enqueued: beginFlowIfNeeded()
-                case .updatedCurrent: await replaceUpdatedCurrent()
-                case .removedCurrent: dismissSourceCurrent()
-                default: break
-                }
+                applyExternalMutation(result.queueMutation)
             }
         }
     }
 
-    private func handleExternalUpdate(_ notification: DockCatNotification) {
-        Task { _ = await queue.updateExternal(notification); await replaceUpdatedCurrent() }
+    private func handleExternalAppearance(_ notification: DockCatNotification) {
+        guard settings.preferences.enabled else { return }
+        Task {
+            observeQueueRevision((await queue.setLimit(settings.preferences.queueLimit)).revision)
+            applyExternalMutation(await queue.enqueueAppeared(notification))
+        }
     }
 
-    private func replaceUpdatedCurrent() async {
-        guard let queued = await queue.currentNotification(), let identity = queued.externalIdentity else { return }
-        guard flowTask == nil, !isPaused, pauseStateIsSynchronized,
-              !isRecovering, machine.state == .waitingForDismissal else {
-            deferredExternalUpdates.insert(identity)
+    private func handleExternalUpdate(_ notification: DockCatNotification) {
+        Task { applyExternalMutation(await queue.updateExternal(notification)) }
+    }
+
+    private func applyExternalMutation(_ mutation: DockCatCore.NotificationQueue.ExternalMutationResult?) {
+        guard let mutation else { return }
+        guard observeQueueRevision(mutation.revision) else {
+            // A stale insertion is still stored. Starting a claim is safe because the actor
+            // will return whichever current item is authoritative at its latest revision.
+            switch mutation {
+            case .inserted:
+                beginFlowIfNeeded()
+            case .updatedCurrent, .unchangedCurrent, .removedCurrent:
+                failQueueReconciliation(context: "stale external current mutation")
+            case .updatedPending, .unchangedPending, .removedPending, .notFound, .duplicate, .full:
+                break
+            }
             return
         }
-        let updated = queued
-        deferredExternalUpdates.remove(identity)
+        switch mutation {
+        case .inserted:
+            beginFlowIfNeeded()
+        case .updatedCurrent(let notification, let revision):
+            replaceUpdatedCurrent(notification, revision: revision)
+        case .unchangedCurrent(let notification, let revision):
+            if current != notification { replaceUpdatedCurrent(notification, revision: revision) }
+        case .updatedPending, .unchangedPending, .removedPending, .notFound, .duplicate, .full:
+            break
+        case .removedCurrent(let notification, _, let revision):
+            dismissSourceCurrent(notification, revision: revision)
+        }
+    }
+
+    private func replaceUpdatedCurrent(_ notification: DockCatNotification, revision: NotificationQueueRevision) {
+        guard let identity = notification.externalIdentity else { return }
+        guard externalLifecycleIsStable else {
+            if deferredExternalUpdates[identity]?.revision ?? 0 <= revision {
+                deferredExternalUpdates[identity] = .init(notification: notification, revision: revision)
+            }
+            return
+        }
+        guard current?.id == notification.id else {
+            failQueueReconciliation(context: "external-update identity mismatch")
+            return
+        }
+        deferredExternalUpdates.removeValue(forKey: identity)
         timeoutTask?.cancel()
-        current = updated
+        current = notification
         startFlow(with: .notificationUpdated)
     }
 
     private func handleExternalDisappearance(_ identity: ExternalNotificationIdentity) {
-        Task {
-            let result = await queue.removeExternal(identity)
-            if result == .removedCurrent { dismissSourceCurrent() }
-        }
+        Task { applyExternalMutation(await queue.removeExternal(identity)) }
     }
 
-    private func dismissSourceCurrent() {
-        guard let identity = current?.externalIdentity else { return }
-        guard flowTask == nil, !isPaused, pauseStateIsSynchronized,
-              !isRecovering, machine.state == .waitingForDismissal else {
-            deferredExternalDisappearances.insert(identity)
+    private func dismissSourceCurrent(_ notification: DockCatNotification, revision: NotificationQueueRevision) {
+        guard let identity = notification.externalIdentity else { return }
+        guard externalLifecycleIsStable else {
+            if deferredExternalDisappearances[identity]?.revision ?? 0 <= revision {
+                deferredExternalDisappearances[identity] = .init(notification: notification, revision: revision)
+            }
+            deferredExternalUpdates.removeValue(forKey: identity)
             return
         }
-        deferredExternalDisappearances.remove(identity)
-        deferredExternalUpdates.remove(identity)
+        guard current?.id == notification.id else {
+            failQueueReconciliation(context: "external-removal identity mismatch")
+            return
+        }
+        deferredExternalDisappearances.removeValue(forKey: identity)
+        deferredExternalUpdates.removeValue(forKey: identity)
         timeoutTask?.cancel()
+        dismissingNotification = notification
+        current = nil
         startDismissal(with: .sourceDisappeared)
     }
 
     /// Applies lifecycle work that arrived while wake/travel/card animation owned the flow.
     /// Disappearance wins over an update because its queue item has already been removed.
-    private func applyDeferredExternalLifecycle() async {
+    private func applyDeferredExternalLifecycle() {
         guard flowTask == nil, machine.state == .waitingForDismissal,
               let identity = current?.externalIdentity else { return }
-        if deferredExternalDisappearances.contains(identity) {
-            dismissSourceCurrent()
-        } else if deferredExternalUpdates.contains(identity) {
-            await replaceUpdatedCurrent()
+        if let removal = deferredExternalDisappearances[identity] {
+            dismissSourceCurrent(removal.notification, revision: removal.revision)
+        } else if let update = deferredExternalUpdates[identity] {
+            replaceUpdatedCurrent(update.notification, revision: update.revision)
         }
     }
 
@@ -218,25 +272,47 @@ final class AppState: ObservableObject {
     func refreshPlacement() { reposition() }
 
     func setPaused(_ paused: Bool) {
-        guard paused != isPaused else { return }
-        let event: CatEvent = paused ? .pause : .resume
-        guard case .accepted(let transition) = apply(event) else { return }
-        isPaused = paused
-        guard executeStateControlEffect(transition.effect) != nil else {
-            failClosedWithoutFlow(transition.effect)
-            return
+        requestedPauseState = paused
+        if pauseTransitionTask == nil, paused == isPaused { return }
+        guard pauseTransitionTask == nil else { return }
+        isPauseTransitioning = true
+        pauseTransitionTask = Task { [weak self] in await self?.drainPauseRequests() }
+    }
+
+    /// Coalesces rapid requests while preserving actor-confirmation order. Coordinator
+    /// state, timers, and visuals change only after the matching queue outcome returns.
+    private func drainPauseRequests() async {
+        while !Task.isCancelled, !isRecovering {
+            let requested = requestedPauseState
+            let outcome = await queue.setPaused(requested)
+            guard !Task.isCancelled, !isRecovering else { break }
+            guard observeQueueRevision(outcome.revision) else {
+                failQueueReconciliation(context: "stale pause decision")
+                break
+            }
+
+            if flowTask == nil, deferredExternalDisappearances.isEmpty,
+               outcome.currentID != current?.id {
+                failQueueReconciliation(context: "pause projection mismatch")
+                break
+            }
+
+            if outcome.isPaused != isPaused {
+                let event: CatEvent = outcome.isPaused ? .pause : .resume
+                guard case .accepted(let transition) = apply(event) else { break }
+                isPaused = outcome.isPaused
+                guard executeStateControlEffect(transition.effect) != nil else {
+                    failClosedWithoutFlow(transition.effect)
+                    break
+                }
+            }
+
+            if requested == requestedPauseState { break }
         }
 
-        pauseRevision &+= 1
-        let revision = pauseRevision
-        Task { [weak self] in
-            guard let self else { return }
-            guard revision == self.pauseRevision else { return }
-            await self.queue.setPaused(paused, revision: revision)
-            guard revision == self.pauseRevision else { return }
-            self.synchronizedPauseRevision = revision
-            if !paused { self.continueAfterResume() }
-        }
+        pauseTransitionTask = nil
+        isPauseTransitioning = false
+        if !isPaused, !isRecovering { continueAfterResume() }
     }
 
     func dismissCurrent() {
@@ -246,18 +322,34 @@ final class AppState: ObservableObject {
     }
 
     private func beginFlowIfNeeded() {
-        guard flowTask == nil, current == nil, !isPaused, pauseStateIsSynchronized,
+        guard flowTask == nil, current == nil, !isPaused, !isPauseTransitioning,
               !isRecovering else { return }
         flowTask = Task { [weak self] in
-            guard let self, let item = await queue.next() else { self?.flowTask = nil; return }
-            current = item
+            guard let self else { return }
+            let decision = await queue.claimNext()
+            guard applyClaim(decision) else { flowTask = nil; return }
+            guard await reconcileQueueProjection(context: "claim") else { flowTask = nil; return }
             await process(startingWith: .notificationAvailable)
             await flowFinished()
         }
     }
 
+    private func applyClaim(_ decision: DockCatCore.NotificationQueue.ClaimResult) -> Bool {
+        guard observeQueueRevision(decision.revision) else {
+            failQueueReconciliation(context: "stale claim decision")
+            return false
+        }
+        switch decision {
+        case .promoted(let notification, _), .current(let notification, _):
+            current = notification
+            return true
+        case .paused, .idle:
+            return false
+        }
+    }
+
     private func continueFlowIfNeeded() {
-        guard flowTask == nil, !isPaused, pauseStateIsSynchronized, !isRecovering else { return }
+        guard flowTask == nil, !isPaused, !isPauseTransitioning, !isRecovering else { return }
         guard let interruptedFlow else { beginFlowIfNeeded(); return }
         flowTask = Task { [weak self] in
             guard let self else { return }
@@ -300,7 +392,7 @@ final class AppState: ObservableObject {
     private func process(startingWith firstEvent: CatEvent) async {
         var nextEvent: CatEvent? = firstEvent
         while let event = nextEvent, !Task.isCancelled, !isRecovering {
-            while isPaused || !pauseStateIsSynchronized, !Task.isCancelled, !isRecovering {
+            while isPaused, !Task.isCancelled, !isRecovering {
                 try? await Task.sleep(for: .milliseconds(50))
             }
             guard !Task.isCancelled, !isRecovering else { return }
@@ -360,26 +452,19 @@ final class AppState: ObservableObject {
             interruptedFlow = nil
             return .completed(nextEvent: .cardPresented)
         case .selectNextQueueAction:
-            if settings.preferences.remainForQueuedMessages, await queue.hasPending() {
-                _ = await queue.completeCurrent()
-                guard let next = await queue.next() else { return failClosed(effect) }
-                current = next
-                return .completed(nextEvent: .nextNotificationAvailable)
-            }
-            return .completed(nextEvent: .queueEmpty)
+            return await selectNextQueueAction(effect: effect)
         case .dismissExpandedCard:
-            guard let item = current else { return failClosed(effect) }
+            guard let item = dismissingNotification else { return failClosed(effect) }
             let result = await cardWindow.dismissActive(
                 toward: catWindow.handoffSourceRect(),
                 reducedMotion: settings.effectiveReducedMotion
             )
-            guard result == .completed, current?.id == item.id else {
+            guard result == .completed, dismissingNotification?.id == item.id else {
                 return handleExpectedInterruption(.dismissal(item), item: item, state: .dismissingCard)
             }
             interruptedFlow = nil
-            current = nil
+            dismissingNotification = nil
             catWindow.hideCarriedCard()
-            _ = await queue.completeCurrent()
             return .completed(nextEvent: .cardDismissed)
         case .travelHome:
             await catWindow.animate(.walkHome, speed: settings.preferences.animationSpeed, reducedMotion: settings.effectiveReducedMotion)
@@ -391,6 +476,56 @@ final class AppState: ObservableObject {
             preconditionFailure("State-control effects are handled before the async effect switch")
         case .none:
             return .completed(nextEvent: nil)
+        }
+    }
+
+    private func selectNextQueueAction(effect: CatCoordinatorEffect) async -> CatEffectExecutionOutcome {
+        // An external disappearance has already removed the actor's current item. Claiming
+        // here is the single atomic selection that preserves stay-at-presentation behavior.
+        if dismissingNotification != nil, current == nil {
+            guard settings.preferences.remainForQueuedMessages else {
+                return .completed(nextEvent: .queueEmpty)
+            }
+            let claim = await queue.claimNext()
+            guard observeQueueRevision(claim.revision) else { return failClosed(effect) }
+            switch claim {
+            case .promoted(let next, _), .current(let next, _):
+                current = next
+                dismissingNotification = nil
+                guard await reconcileQueueProjection(context: "claim after external removal") else {
+                    return .cancelled
+                }
+                return .completed(nextEvent: .nextNotificationAvailable)
+            case .idle:
+                return .completed(nextEvent: .queueEmpty)
+            case .paused:
+                return .cancelled
+            }
+        }
+
+        let policy: DockCatCore.NotificationQueue.CompletionPolicy = settings.preferences.remainForQueuedMessages
+            ? .advanceImmediately
+            : .leavePendingForLater
+        let decision = await queue.completeCurrent(policy: policy)
+        guard observeQueueRevision(decision.revision) else { return failClosed(effect) }
+
+        switch decision {
+        case .advanced(let completed, let next, _):
+            guard current?.id == completed.id else { return failClosed(effect) }
+            current = next
+            dismissingNotification = nil
+            guard await reconcileQueueProjection(context: "completion and advance") else { return .cancelled }
+            return .completed(nextEvent: .nextNotificationAvailable)
+        case .completedAndIdle(let completed, _),
+             .completedWithPending(let completed, _, _),
+             .pausedAfterCompletion(let completed, _, _):
+            guard current?.id == completed.id else { return failClosed(effect) }
+            current = nil
+            dismissingNotification = completed
+            guard await reconcileQueueProjection(context: "completion without advance") else { return .cancelled }
+            return .completed(nextEvent: .queueEmpty)
+        case .noCurrent:
+            return failClosed(effect)
         }
     }
 
@@ -419,7 +554,11 @@ final class AppState: ObservableObject {
     }
 
     private func continueAfterResume() {
-        guard !isPaused, !isRecovering else { return }
+        guard !isPaused, !isPauseTransitioning, !isRecovering else { return }
+        if machine.state == .waitingForDismissal {
+            applyDeferredExternalLifecycle()
+            if flowTask != nil { return }
+        }
         if let current, machine.state == .waitingForDismissal {
             scheduleTimeoutIfNeeded(current)
         }
@@ -431,7 +570,11 @@ final class AppState: ObservableObject {
         item: DockCatNotification,
         state expectedState: CatState
     ) -> CatEffectExecutionOutcome {
-        guard !Task.isCancelled, current?.id == item.id,
+        let ownedID: UUID? = switch interruption {
+        case .dismissal: dismissingNotification?.id
+        case .initialPresentation, .replacement: current?.id
+        }
+        guard !Task.isCancelled, ownedID == item.id,
               isPaused || machine.state == expectedState else { return .cancelled }
         interruptedFlow = interruption
         return .cancelled
@@ -450,7 +593,7 @@ final class AppState: ObservableObject {
             return
         }
         if machine.state == .waitingForDismissal {
-            await applyDeferredExternalLifecycle()
+            applyDeferredExternalLifecycle()
             if flowTask == nil, let current { scheduleTimeoutIfNeeded(current) }
         } else if machine.state == .sleeping {
             beginFlowIfNeeded()
@@ -470,7 +613,7 @@ final class AppState: ObservableObject {
     }
 
     private func startDismissal(with event: CatEvent) {
-        guard flowTask == nil, !isPaused, pauseStateIsSynchronized, !isRecovering,
+        guard flowTask == nil, !isPaused, !isPauseTransitioning, !isRecovering,
               machine.state == .waitingForDismissal else { return }
         timeoutTask?.cancel()
         timeoutTask = nil
@@ -486,22 +629,49 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func scheduleRecovery(after rejection: CatTransitionRejection) {
+    @discardableResult
+    private func observeQueueRevision(_ revision: NotificationQueueRevision) -> Bool {
+        guard revision >= observedQueueRevision else {
+            logger.error(
+                "Stale queue decision revision=\(revision, privacy: .public) observed=\(self.observedQueueRevision, privacy: .public) ignored=true"
+            )
+            return false
+        }
+        observedQueueRevision = revision
+        return true
+    }
+
+    /// Used only at stable decision boundaries; the queue is never polled continuously.
+    private func reconcileQueueProjection(context: String) async -> Bool {
+        let snapshot = await queue.snapshot()
+        guard observeQueueRevision(snapshot.revision), snapshot.matches(projectedCurrent: current) else {
+            failQueueReconciliation(context: context)
+            return false
+        }
+        return true
+    }
+
+    private func failQueueReconciliation(context: String) {
+        logger.fault(
+            "Queue projection mismatch revision=\(self.observedQueueRevision, privacy: .public) context=\(context, privacy: .public) recovery=true"
+        )
+        scheduleRecovery(context: "queue projection: \(context)")
+    }
+
+    private func scheduleRecovery(context: String) {
         guard recoveryGate.requestRecovery() else { return }
         isRecovering = true
         recoveryTask = Task { [weak self] in
-            await self?.recoverFromDivergence(
-                context: "event=\(rejection.event.rawValue) reason=\(rejection.reason.rawValue)"
-            )
+            await self?.recoverFromDivergence(context: context)
         }
     }
 
+    private func scheduleRecovery(after rejection: CatTransitionRejection) {
+        scheduleRecovery(context: "event=\(rejection.event.rawValue) reason=\(rejection.reason.rawValue)")
+    }
+
     private func scheduleRecovery(afterEffect effect: CatCoordinatorEffect) {
-        guard recoveryGate.requestRecovery() else { return }
-        isRecovering = true
-        recoveryTask = Task { [weak self] in
-            await self?.recoverFromDivergence(context: "effect=\(effect.rawValue)")
-        }
+        scheduleRecovery(context: "effect=\(effect.rawValue)")
     }
 
     /// Fail-closed policy: drop only the inconsistent active item, preserve pending items,
@@ -509,6 +679,7 @@ final class AppState: ObservableObject {
     private func recoverFromDivergence(context: String) async {
         let interruptedTask = flowTask
         interruptedTask?.cancel()
+        pauseTransitionTask?.cancel()
         timeoutTask?.cancel()
         cardWindow.cancelPresentationAnimation()
         catWindow.cancelVisualWork()
@@ -521,12 +692,16 @@ final class AppState: ObservableObject {
         interruptedFlow = nil
         deferredExternalUpdates.removeAll()
         deferredExternalDisappearances.removeAll()
+        dismissingNotification = nil
+        let completion = await queue.completeCurrent(policy: .leavePendingForLater)
+        _ = observeQueueRevision(completion.revision)
         current = nil
-        _ = await queue.completeCurrent()
+        requestedPauseState = false
+        let pause = await queue.setPaused(false)
+        _ = observeQueueRevision(pause.revision)
         isPaused = false
-        pauseRevision &+= 1
-        await queue.setPaused(false, revision: pauseRevision)
-        synchronizedPauseRevision = pauseRevision
+        isPauseTransitioning = false
+        pauseTransitionTask = nil
         let recovery = machine.recoverToSleeping()
         catState = recovery.safeState
         flowTask = nil
@@ -546,7 +721,9 @@ final class AppState: ObservableObject {
         cardWindow.position(above: geometry.presentationPoint, offset: settings.preferences.cardOffset)
     }
 
-    private var pauseStateIsSynchronized: Bool {
-        synchronizedPauseRevision == pauseRevision
+    private var externalLifecycleIsStable: Bool {
+        flowTask == nil && !isPaused && !isPauseTransitioning && !isRecovering
+            && machine.state == .waitingForDismissal
     }
+
 }
