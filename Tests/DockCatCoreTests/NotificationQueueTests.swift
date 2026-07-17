@@ -42,4 +42,12 @@ final class NotificationQueueTests: XCTestCase {
         let resumedNext = await queue.next()
         XCTAssertEqual(resumedNext, item)
     }
+
+    func testStalePauseRevisionCannotOverrideLatestState() async {
+        let queue = DockCatCore.NotificationQueue()
+        await queue.setPaused(false, revision: 2)
+        await queue.setPaused(true, revision: 1)
+        let isPaused = await queue.isPaused()
+        XCTAssertFalse(isPaused)
+    }
 }

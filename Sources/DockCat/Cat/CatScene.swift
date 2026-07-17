@@ -131,9 +131,9 @@ final class CatScene: SKScene {
         }
     }
 
-    /// Cancels every visual operation and resolves its waiter before restoring the sleep pose.
-    /// Resolving waiters is required so recovery cannot strand a flow task in a continuation.
-    func resetToSleeping() {
+    /// Cancels every visual operation and resolves its waiter. Resolving waiters is required
+    /// so recovery cannot strand a flow task in a continuation.
+    func cancelAnimations() {
         cat.removeAllActions()
         card.removeAllActions()
         tail?.removeAllActions()
@@ -142,6 +142,10 @@ final class CatScene: SKScene {
         let continuations = Array(animationContinuations.values)
         animationContinuations.removeAll()
         continuations.forEach { $0.resume() }
+    }
+
+    func resetToSleeping() {
+        cancelAnimations()
         hideMiniCard()
         stopWalkLoop()
         body.yScale = 1

@@ -62,7 +62,9 @@ final class CatWindowController {
         let turn = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .turning, reducedMotion: reducedMotion)
         var walk = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .walking, reducedMotion: reducedMotion)
         await scene.runAsync(purpose == .home ? .turnHome(turn) : .turnToPresentation(turn), duration: 0.18, reducedMotion: reducedMotion)
+        guard !Task.isCancelled else { return }
         await scene.runAsync(purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk), duration: plan.duration, reducedMotion: reducedMotion)
+        guard !Task.isCancelled else { return }
         var result = await motionDriver.move(to: destinationOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
         while result == .cancelled, !Task.isCancelled {
             scene.stopLocomotion(cancelled: true, context: walk)
@@ -71,8 +73,10 @@ final class CatWindowController {
             plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(currentTargetOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
             walk = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .walking, reducedMotion: reducedMotion)
             await scene.runAsync(purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk), duration: plan.duration, reducedMotion: reducedMotion)
+            guard !Task.isCancelled else { return }
             result = await motionDriver.move(to: currentTargetOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
         }
+        guard !Task.isCancelled else { return }
         scene.stopLocomotion(cancelled: result == .cancelled, context: walk)
         guard result == .completed else { return }
         if purpose == .presentation {
@@ -93,10 +97,14 @@ final class CatWindowController {
     }
     func pause() { isMotionPaused = true; motionDriver.cancelActiveMotion(); scene.isPaused = true }
     func resume() { isMotionPaused = false; scene.isPaused = false }
-    func resetToSleeping() {
+    func cancelVisualWork() {
         isMotionPaused = false
         scene.isPaused = false
         motionDriver.cancelActiveMotion()
+        scene.cancelAnimations()
+    }
+    func resetToSleeping() {
+        cancelVisualWork()
         scene.resetToSleeping()
         panel.setFrameOrigin(Self.panelOrigin(forVisualAnchor: sleepingPoint))
         panel.alphaValue = 1

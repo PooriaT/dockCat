@@ -63,6 +63,8 @@ final class AppState: ObservableObject {
     private var recoveryTask: Task<Void, Never>?
     private var isRecovering = false
     private var recoveryGate = CatRecoveryGate()
+    private var pauseRevision: UInt = 0
+    private var synchronizedPauseRevision: UInt = 0
     private var lifecycleReconciliationTask: Task<Void, Never>?
     private var deferredExternalUpdates = Set<ExternalNotificationIdentity>()
     private var deferredExternalDisappearances = Set<ExternalNotificationIdentity>()
@@ -164,7 +166,8 @@ final class AppState: ObservableObject {
 
     private func replaceUpdatedCurrent() async {
         guard let queued = await queue.currentNotification(), let identity = queued.externalIdentity else { return }
-        guard flowTask == nil, !isRecovering, machine.state == .waitingForDismissal else {
+        guard flowTask == nil, !isPaused, pauseStateIsSynchronized,
+              !isRecovering, machine.state == .waitingForDismissal else {
             deferredExternalUpdates.insert(identity)
             return
         }
@@ -184,7 +187,8 @@ final class AppState: ObservableObject {
 
     private func dismissSourceCurrent() {
         guard let identity = current?.externalIdentity else { return }
-        guard flowTask == nil, !isRecovering, machine.state == .waitingForDismissal else {
+        guard flowTask == nil, !isPaused, pauseStateIsSynchronized,
+              !isRecovering, machine.state == .waitingForDismissal else {
             deferredExternalDisappearances.insert(identity)
             return
         }
@@ -218,10 +222,20 @@ final class AppState: ObservableObject {
         let event: CatEvent = paused ? .pause : .resume
         guard case .accepted(let transition) = apply(event) else { return }
         isPaused = paused
+        guard executeStateControlEffect(transition.effect) != nil else {
+            failClosedWithoutFlow(transition.effect)
+            return
+        }
+
+        pauseRevision &+= 1
+        let revision = pauseRevision
         Task { [weak self] in
             guard let self else { return }
-            await queue.setPaused(paused)
-            _ = await execute(transition.effect)
+            guard revision == self.pauseRevision else { return }
+            await self.queue.setPaused(paused, revision: revision)
+            guard revision == self.pauseRevision else { return }
+            self.synchronizedPauseRevision = revision
+            if !paused { self.continueAfterResume() }
         }
     }
 
@@ -232,7 +246,8 @@ final class AppState: ObservableObject {
     }
 
     private func beginFlowIfNeeded() {
-        guard flowTask == nil, current == nil, !isPaused, !isRecovering else { return }
+        guard flowTask == nil, current == nil, !isPaused, pauseStateIsSynchronized,
+              !isRecovering else { return }
         flowTask = Task { [weak self] in
             guard let self, let item = await queue.next() else { self?.flowTask = nil; return }
             current = item
@@ -242,7 +257,7 @@ final class AppState: ObservableObject {
     }
 
     private func continueFlowIfNeeded() {
-        guard flowTask == nil, !isPaused, !isRecovering else { return }
+        guard flowTask == nil, !isPaused, pauseStateIsSynchronized, !isRecovering else { return }
         guard let interruptedFlow else { beginFlowIfNeeded(); return }
         flowTask = Task { [weak self] in
             guard let self else { return }
@@ -285,7 +300,7 @@ final class AppState: ObservableObject {
     private func process(startingWith firstEvent: CatEvent) async {
         var nextEvent: CatEvent? = firstEvent
         while let event = nextEvent, !Task.isCancelled, !isRecovering {
-            while isPaused, !Task.isCancelled, !isRecovering {
+            while isPaused || !pauseStateIsSynchronized, !Task.isCancelled, !isRecovering {
                 try? await Task.sleep(for: .milliseconds(50))
             }
             guard !Task.isCancelled, !isRecovering else { return }
@@ -302,6 +317,8 @@ final class AppState: ObservableObject {
     }
 
     private func execute(_ effect: CatCoordinatorEffect) async -> CatEffectExecutionOutcome {
+        if let outcome = executeStateControlEffect(effect) { return outcome }
+
         switch effect {
         case .wake:
             await catWindow.animate(.wake, speed: settings.preferences.animationSpeed, reducedMotion: settings.effectiveReducedMotion)
@@ -370,6 +387,19 @@ final class AppState: ObservableObject {
         case .settleToSleep:
             await catWindow.animate(.settle, speed: settings.preferences.animationSpeed, reducedMotion: settings.effectiveReducedMotion)
             return Task.isCancelled ? .cancelled : .completed(nextEvent: .animationCompleted)
+        case .pauseVisualWork, .resumePriorWork:
+            preconditionFailure("State-control effects are handled before the async effect switch")
+        case .none:
+            return .completed(nextEvent: nil)
+        }
+    }
+
+    /// Pause/resume effects contain no suspension point, so the visible state is updated in
+    /// the same main-actor turn as the state-machine decision.
+    private func executeStateControlEffect(
+        _ effect: CatCoordinatorEffect
+    ) -> CatEffectExecutionOutcome? {
+        switch effect {
         case .pauseVisualWork:
             timeoutTask?.cancel()
             cardWindow.cancelPresentationAnimation()
@@ -377,18 +407,23 @@ final class AppState: ObservableObject {
             return .completed(nextEvent: nil)
         case .resumePriorWork:
             catWindow.resume()
-            Task { [weak self] in
-                await Task.yield()
-                guard let self, !self.isPaused, !self.isRecovering else { return }
-                if let current = self.current, self.machine.state == .waitingForDismissal {
-                    self.scheduleTimeoutIfNeeded(current)
-                }
-                self.continueFlowIfNeeded()
-            }
             return .completed(nextEvent: nil)
-        case .none:
-            return .completed(nextEvent: nil)
+        default:
+            return nil
         }
+    }
+
+    private func failClosedWithoutFlow(_ effect: CatCoordinatorEffect) {
+        logger.fault("Unexpected state-control effect=\(effect.rawValue, privacy: .public) recovery=true")
+        scheduleRecovery(afterEffect: effect)
+    }
+
+    private func continueAfterResume() {
+        guard !isPaused, !isRecovering else { return }
+        if let current, machine.state == .waitingForDismissal {
+            scheduleTimeoutIfNeeded(current)
+        }
+        continueFlowIfNeeded()
     }
 
     private func handleExpectedInterruption(
@@ -435,7 +470,7 @@ final class AppState: ObservableObject {
     }
 
     private func startDismissal(with event: CatEvent) {
-        guard flowTask == nil, !isPaused, !isRecovering,
+        guard flowTask == nil, !isPaused, pauseStateIsSynchronized, !isRecovering,
               machine.state == .waitingForDismissal else { return }
         timeoutTask?.cancel()
         timeoutTask = nil
@@ -476,16 +511,22 @@ final class AppState: ObservableObject {
         interruptedTask?.cancel()
         timeoutTask?.cancel()
         cardWindow.cancelPresentationAnimation()
-        catWindow.resetToSleeping()
+        catWindow.cancelVisualWork()
         cardWindow.forceHide()
         await interruptedTask?.value
+        // Cancellation unblocks continuations first. This final reset runs only after the
+        // old flow can no longer overwrite the sleeping pose or card visibility.
+        catWindow.resetToSleeping()
+        cardWindow.forceHide()
         interruptedFlow = nil
         deferredExternalUpdates.removeAll()
         deferredExternalDisappearances.removeAll()
         current = nil
         _ = await queue.completeCurrent()
-        await queue.setPaused(false)
         isPaused = false
+        pauseRevision &+= 1
+        await queue.setPaused(false, revision: pauseRevision)
+        synchronizedPauseRevision = pauseRevision
         let recovery = machine.recoverToSleeping()
         catState = recovery.safeState
         flowTask = nil
@@ -503,5 +544,9 @@ final class AppState: ObservableObject {
         let geometry = locator.locate(preferences: settings.preferences)
         catWindow.position(at: geometry.sleepingPoint, presentationPoint: geometry.presentationPoint, dockEdge: geometry.edge)
         cardWindow.position(above: geometry.presentationPoint, offset: settings.preferences.cardOffset)
+    }
+
+    private var pauseStateIsSynchronized: Bool {
+        synchronizedPauseRevision == pauseRevision
     }
 }
