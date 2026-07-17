@@ -21,6 +21,7 @@ final class AppState: ObservableObject {
     @Published private(set) var isPaused = false
     @Published private(set) var isPauseTransitioning = false
     @Published private(set) var currentPlacement: DockPlacement?
+    @Published private var isPlacementCurrentlyResolved = false
     @Published private(set) var isCalibrationPreviewActive = false
     let settings = SettingsStore()
     let displayCatalog = DisplayCatalog()
@@ -402,10 +403,15 @@ final class AppState: ObservableObject {
 
     func refreshPlacement() { reposition() }
 
+    var isCalibrationAvailable: Bool {
+        isPlacementCurrentlyResolved
+            && currentPlacement?.requestedDisplayAvailable == true
+    }
+
     func startCalibrationPreview() {
         guard settings.preferences.enabled,
-              let placement = currentPlacement,
-              placement.requestedDisplayAvailable else { return }
+              isCalibrationAvailable,
+              let placement = currentPlacement else { return }
         calibrationPreview.start(with: placement)
         isCalibrationPreviewActive = true
     }
@@ -1014,6 +1020,7 @@ final class AppState: ObservableObject {
             )
         ) else {
             stopCalibrationPreview()
+            isPlacementCurrentlyResolved = false
             let availability = PlacementRefreshPolicy.availabilityAction(
                 hasResolvedPlacement: false,
                 hasLastValidPlacement: lastValidPlacement != nil
@@ -1028,6 +1035,7 @@ final class AppState: ObservableObject {
         let isFirstValidPlacement = lastValidPlacement == nil
         lastValidPlacement = geometry
         currentPlacement = geometry
+        isPlacementCurrentlyResolved = true
         if let migrated = geometry.migratedSelection,
            migrated != settings.preferences.displaySelection {
             settings.preferences.displaySelection = migrated

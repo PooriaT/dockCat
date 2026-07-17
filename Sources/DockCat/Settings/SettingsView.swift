@@ -122,7 +122,7 @@ struct SettingsView: View {
     private enum CalibrationAxis { case alongDock, awayFromDock }
 
     private var canCalibrate: Bool {
-        state.currentPlacement?.requestedDisplayAvailable == true
+        state.isCalibrationAvailable
     }
 
     private var selectedSpecificDisplayIsDisconnected: Bool {
@@ -178,8 +178,8 @@ struct SettingsView: View {
                 }
             },
             set: { value in
-                guard let placement = state.currentPlacement,
-                      placement.requestedDisplayAvailable else { return }
+                guard state.isCalibrationAvailable,
+                      let placement = state.currentPlacement else { return }
                 var calibration = state.settings.preferences.calibration(
                     for: placement.displayIdentity, edge: placement.edge
                 )
@@ -197,7 +197,8 @@ struct SettingsView: View {
     }
 
     private func resetCurrentCalibration() {
-        guard let placement = state.currentPlacement else { return }
+        guard state.isCalibrationAvailable,
+              let placement = state.currentPlacement else { return }
         state.settings.preferences.resetCalibration(
             for: placement.displayIdentity, edge: placement.edge
         )
