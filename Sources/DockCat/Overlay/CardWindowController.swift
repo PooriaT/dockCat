@@ -18,6 +18,14 @@ final class CardWindowController: NSObject, NSWindowDelegate {
 
     func cancelPresentationAnimation() { operationID = UUID(); panel.animator().alphaValue = panel.alphaValue }
 
+    func forceHide() {
+        cancelPresentationAnimation()
+        suppressCloseCallback = true
+        panel.orderOut(nil)
+        suppressCloseCallback = false
+        panel.alphaValue = 1
+    }
+
     func present(notification: DockCatNotification, preferences: DockCatPreferences, from sourceRect: CGRect, reducedMotion: Bool) async -> PresentationAnimationResult {
         let id = UUID(); operationID = id
         install(notification: notification, preferences: preferences)

@@ -56,14 +56,14 @@ final class CatWindowController {
         }
     }
 
-    private func animateTravel(_ animation: CatAnimation, targetOrigin: CGPoint, speed: Double, reducedMotion: Bool) async {
+    private func animateTravel(_ animation: CatAnimation, targetOrigin destinationOrigin: CGPoint, speed: Double, reducedMotion: Bool) async {
         let purpose: CatTravelPurpose = switch animation { case .walkHome: .home; default: .presentation }
-        var plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(targetOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
+        var plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(destinationOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
         let turn = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .turning, reducedMotion: reducedMotion)
         var walk = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .walking, reducedMotion: reducedMotion)
         await scene.runAsync(purpose == .home ? .turnHome(turn) : .turnToPresentation(turn), duration: 0.18, reducedMotion: reducedMotion)
         await scene.runAsync(purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk), duration: plan.duration, reducedMotion: reducedMotion)
-        var result = await motionDriver.move(to: targetOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
+        var result = await motionDriver.move(to: destinationOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
         while result == .cancelled, !Task.isCancelled {
             scene.stopLocomotion(cancelled: true, context: walk)
             while isMotionPaused, !Task.isCancelled { try? await Task.sleep(nanoseconds: 50_000_000) }
@@ -93,4 +93,13 @@ final class CatWindowController {
     }
     func pause() { isMotionPaused = true; motionDriver.cancelActiveMotion(); scene.isPaused = true }
     func resume() { isMotionPaused = false; scene.isPaused = false }
+    func resetToSleeping() {
+        isMotionPaused = false
+        scene.isPaused = false
+        motionDriver.cancelActiveMotion()
+        scene.resetToSleeping()
+        panel.setFrameOrigin(Self.panelOrigin(forVisualAnchor: sleepingPoint))
+        panel.alphaValue = 1
+        panel.orderFrontRegardless()
+    }
 }
