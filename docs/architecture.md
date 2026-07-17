@@ -54,6 +54,45 @@ The main-actor session coordinator stores the phase, revision, choreography and 
 Dismissal is arbitrated once per session. User close, transient expiry, source disappearance, disable, source shutdown, permission loss, recovery, queue removal, replacement, and shutdown are explicit causes. Only the first cause can enter dismissal; later causes are stale or already dismissing. Logs record generation and cause only, never content.
 
 SpriteKit awaited actions use unique keyed operation IDs and checked continuations. Cancellation or slot replacement removes only that action and resumes `.cancelled`; loop removal stays independent. Cat panel travel is tied to the presentation token and validates before every frame or final snap. AppKit animations use cancellation handlers and deterministic completion/cancellation frames. Shutdown and recovery cancel the session before resetting visuals, so no animation waiter intentionally survives.
+
+## Logical placement refresh
+
+Screen and position-setting changes resolve a Foundation-only `CatLogicalPlacement` from
+the state machine, the active presentation phase, choreography ownership, and global
+recovery/enable state. The states are `home`, `travellingToPresentation`, `presentation`,
+`travellingHome`, and `hiddenOrRecovering`. A paused flow uses its unchanged presentation
+phase, so pausing during either travel direction does not make the cat logically home.
+
+`AppState` coalesces geometry bursts to the next main-actor turn and applies the newest
+preferences as one cat-and-card transaction. Refresh policy is state specific:
+
+- Home, wake, pickup, and settlement install both anchors and move the panel to the new
+  sleeping origin without replacing the current SpriteKit pose.
+- Outbound and return travel install both anchors and the new Dock edge, preserve the
+  current panel origin, and cancel only the current motion operation. The existing travel
+  loop keeps its `PresentationSessionID`, reads the new destination, edge, axis, and
+  direction, then plans again from the panel's actual origin. A placement revision also
+  catches a refresh during the arrival pose, and repeated refreshes collapse to the newest
+  target. Paused travel reads that target after resume.
+- Presentation, waiting, replacement, and card dismissal move the cat to the new
+  presentation anchor. The card stores the matching anchor in the same main-actor turn.
+  Stable cards relocate immediately. Active AppKit operations record a placement revision,
+  retarget their visual frame, and reassert the newest frame before accepting completion;
+  content, operation/session identity, timers, and the user-dismiss callback are untouched.
+- Recovery and global disable may accept newer anchors for their eventual reset, but never
+  restart or relocate active visual work; their existing fail-closed policy owns the reset.
+
+`DockLocator` returns no placement when AppKit has no screen. `AppState` then retains the
+last valid anchors and current overlay frames—never a synthetic zero coordinate—and applies
+the next valid resolution when a screen returns. Before the first valid placement, the cat
+stays unordered and notification claiming waits; the first valid geometry establishes the
+sleeping overlay before queued delivery begins. Falling back from a missing selected screen
+to an available screen is recorded without logging screen descriptions.
+
+Geometry refresh has its own privacy-safe revision and does not submit a state-machine
+event, claim/complete a queue item, change the projected notification, create a presentation
+session, or restart transient timing. Dock-edge-aware/clamped card geometry remains issue
+#78; stable display identity, selection policy, calibration, and previews remain issue #79.
 # External lifecycle reconciliation
 
 `ExternalNotificationLifecycleTracker` serializes bounded visible-item state and emits typed lifecycle events. `ExternalPresentationPolicy` deterministically maps structural evidence to best-effort presentation behavior. `NotificationQueue` remains the atomic owner of pending/current items and supports identity-based update, removal, and location while preserving DockCat UUIDs and pending FIFO order.

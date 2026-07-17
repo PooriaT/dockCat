@@ -51,6 +51,32 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 - Update an external notification during card expansion and replacement, then remove it during wake, travel, expansion, replacement, and dismissal. Confirm disappearance wins and no old content returns.
 - Disable DockCat, revoke Accessibility permission, and quit during wake, travel, presentation, and dismissal. After each case, send a new test notification and confirm there is no stuck cat, stale panel, old-destination snap, or delayed dismissal.
 
+## Placement refresh during choreography
+
+- While the cat sleeps, drag each Position slider. Confirm the sleeping cat follows the
+  newest anchor without task buildup.
+- Change Position while wake and pickup animations run. Confirm the cat moves home while
+  the current pose continues and the notification is not restarted.
+- During outbound travel, move the Dock to another edge and attach or detach a display.
+  Confirm the cat continues from its current origin toward the newest presentation anchor,
+  with no snap to home or either old anchor.
+- Pause during outbound and return travel, change geometry, then resume. Confirm the cat
+  continues toward the new target and the same notification remains active.
+- With stable transient and persistent cards visible, change offsets and display resolution.
+  Confirm cat and card remain together and the transient remaining duration is unchanged.
+- Change geometry during initial card presentation, queued replacement, and card dismissal.
+  Confirm the visual operation rebases, content does not revert, and no placement refresh
+  is treated as a user close.
+- Change the Dock edge during return travel and settlement. Confirm return retargets from
+  the current origin and settlement completes at the new sleeping anchor without showing a
+  card.
+- Repeatedly drag a Position slider and inspect privacy-safe placement logs. They may contain
+  only revision, logical placement, old/new Dock edge, retarget/rebase flags, and fallback or
+  last-valid use. Confirm a later notification still completes normally.
+- Where practical, detach the selected display and briefly exercise a no-screen transition.
+  Confirm overlays never move to zero; the last valid geometry remains until a valid fallback
+  or returning screen is resolved.
+
 ## Effect-driven transitions and recovery
 
 - Send an internal transient notification and confirm the complete wake, pickup, travel, presentation, timeout, card dismissal, return, settle, and sleep flow.
