@@ -60,6 +60,7 @@ final class AppState: ObservableObject {
     private let locator = DockLocator()
     private let presentation = PresentationSessionCoordinator()
     private var claimTask: Task<Void, Never>?
+    private var disableCleanupTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
     private var pauseTransitionTask: Task<Void, Never>?
     private var isRecovering = false
@@ -94,6 +95,8 @@ final class AppState: ObservableObject {
         clearExternalNotifications()
         systemNotificationAccess.shutdown()
         claimTask?.cancel()
+        disableCleanupTask?.cancel()
+        disableCleanupTask = nil
         presentation.cancelSession(reason: .appShutdown)
         recoveryTask?.cancel()
         pauseTransitionTask?.cancel()
@@ -125,7 +128,10 @@ final class AppState: ObservableObject {
         guard settings.preferences.enabled != enabled else { return }
         settings.preferences.enabled = enabled
         if enabled {
-            beginFlowIfNeeded()
+            // A disable cleanup may already be inside the queue actor and cannot be
+            // withdrawn. Its completion restarts delivery after restoring a clean
+            // sleeping projection, so enabling must wait behind it.
+            if disableCleanupTask == nil { beginFlowIfNeeded() }
             return
         }
         claimTask?.cancel()
@@ -136,13 +142,20 @@ final class AppState: ObservableObject {
         deferredExternalUpdate = nil
         deferredExternalDisappearance = nil
         dismissingNotification = nil
-        Task { [weak self] in
+        guard disableCleanupTask == nil else { return }
+        disableCleanupTask = Task { [weak self] in
             guard let self else { return }
             let completion = await queue.completeCurrent(policy: .leavePendingForLater)
+            guard !Task.isCancelled else {
+                disableCleanupTask = nil
+                return
+            }
             _ = observeQueueRevision(completion.revision)
             projectNoCurrent(revision: completion.revision)
             let recovery = machine.recoverToSleeping()
             catState = recovery.safeState
+            disableCleanupTask = nil
+            if settings.preferences.enabled { beginFlowIfNeeded() }
         }
     }
 
@@ -423,7 +436,8 @@ final class AppState: ObservableObject {
     }
 
     private func beginFlowIfNeeded() {
-        guard claimTask == nil, !presentation.hasChoreographyTask,
+        guard settings.preferences.enabled, disableCleanupTask == nil,
+              claimTask == nil, !presentation.hasChoreographyTask,
               current == nil, !isPaused, !isPauseTransitioning,
               !isRecovering else { return }
         claimTask = Task { [weak self] in
