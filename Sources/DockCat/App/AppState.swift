@@ -20,7 +20,10 @@ final class AppState: ObservableObject {
     @Published private(set) var catState: CatState = .sleeping
     @Published private(set) var isPaused = false
     @Published private(set) var isPauseTransitioning = false
+    @Published private(set) var currentPlacement: DockPlacement?
+    @Published private(set) var isCalibrationPreviewActive = false
     let settings = SettingsStore()
+    let displayCatalog = DisplayCatalog()
     private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
         dismissalRegistry: accessibilityElementRegistry,
         eventHandler: { [weak self] event in self?.receive(sourceEvent: event) },
@@ -58,6 +61,7 @@ final class AppState: ObservableObject {
     private let catWindow = CatWindowController()
     private let cardWindow = CardWindowController()
     private let locator = DockLocator()
+    private let calibrationPreview = DockCalibrationPreviewController()
     private let presentation = PresentationSessionCoordinator()
     private var claimTask: Task<Void, Never>?
     private var disableCleanupTask: Task<Void, Never>?
@@ -72,7 +76,6 @@ final class AppState: ObservableObject {
     private var deferredExternalUpdate: DeferredExternalUpdate?
     private var deferredExternalDisappearance: DeferredExternalRemoval?
     private var dismissingNotification: DockCatNotification?
-    private var screenMonitor: ScreenChangeMonitor?
     private var placementRefreshTask: Task<Void, Never>?
     private var placementRevision: UInt64 = 0
     private var lastValidPlacement: DockPlacement?
@@ -82,7 +85,10 @@ final class AppState: ObservableObject {
         systemNotificationAccess.refresh()
         applyNewestPlacement()
         cardWindow.onDismiss = { [weak self] in self?.dismissCurrent() }
-        screenMonitor = ScreenChangeMonitor { [weak self] in self?.reposition() }
+        displayCatalog.onChange = { [weak self] in
+            self?.objectWillChange.send()
+            self?.reposition()
+        }
         lifecycleReconciliationTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
@@ -108,8 +114,8 @@ final class AppState: ObservableObject {
         placementRefreshTask = nil
         cardWindow.forceHide()
         catWindow.cancelVisualWork()
-        screenMonitor?.stop()
-        screenMonitor = nil
+        stopCalibrationPreview()
+        displayCatalog.stop()
     }
 
     private func clearExternalNotifications() {
@@ -138,6 +144,7 @@ final class AppState: ObservableObject {
             if disableCleanupTask == nil { beginFlowIfNeeded() }
             return
         }
+        stopCalibrationPreview()
         claimTask?.cancel()
         claimTask = nil
         pauseTransitionTask?.cancel()
@@ -394,6 +401,19 @@ final class AppState: ObservableObject {
     }
 
     func refreshPlacement() { reposition() }
+
+    func startCalibrationPreview() {
+        guard settings.preferences.enabled,
+              let placement = currentPlacement,
+              placement.requestedDisplayAvailable else { return }
+        calibrationPreview.start(with: placement)
+        isCalibrationPreviewActive = true
+    }
+
+    func stopCalibrationPreview() {
+        calibrationPreview.stop()
+        isCalibrationPreviewActive = false
+    }
 
     func setPaused(_ paused: Bool) {
         guard settings.preferences.enabled, disableCleanupTask == nil else { return }
@@ -811,6 +831,9 @@ final class AppState: ObservableObject {
             applyDeferredExternalLifecycle()
         } else if machine.state == .sleeping {
             presentation.finishSession(sessionID)
+            // A specifically selected display may have reconnected while presentation
+            // was active. Sleeping is the documented safe restoration boundary.
+            reposition()
             beginFlowIfNeeded()
         }
     }
@@ -983,7 +1006,14 @@ final class AppState: ObservableObject {
             isEnabled: settings.preferences.enabled
         )
 
-        guard let geometry = locator.locate(preferences: settings.preferences) else {
+        guard let geometry = locator.locate(
+            preferences: settings.preferences,
+            catalog: displayCatalog,
+            safeToRestoreSpecific: PlacementRefreshPolicy.canRestoreSpecificDisplay(
+                catState: machine.state
+            )
+        ) else {
+            stopCalibrationPreview()
             let availability = PlacementRefreshPolicy.availabilityAction(
                 hasResolvedPlacement: false,
                 hasLastValidPlacement: lastValidPlacement != nil
@@ -997,6 +1027,16 @@ final class AppState: ObservableObject {
 
         let isFirstValidPlacement = lastValidPlacement == nil
         lastValidPlacement = geometry
+        currentPlacement = geometry
+        if let migrated = geometry.migratedSelection,
+           migrated != settings.preferences.displaySelection {
+            settings.preferences.displaySelection = migrated
+        }
+        if geometry.requestedDisplayAvailable {
+            calibrationPreview.update(geometry)
+        } else {
+            stopCalibrationPreview()
+        }
         let sessionID = presentation.activeSessionID
         let catOutcome = catWindow.updatePlacement(
             geometry, logicalState: logicalPlacement, sessionID: sessionID
@@ -1024,7 +1064,7 @@ final class AppState: ObservableObject {
             beginFlowIfNeeded()
         }
         logger.info(
-            "Placement refresh revision=\(self.placementRevision, privacy: .public) logical=\(logicalPlacement.rawValue, privacy: .public) oldEdge=\(catOutcome.previousDockEdge.rawValue, privacy: .public) newEdge=\(geometry.edge.rawValue, privacy: .public) motionRetargeted=\(catOutcome.motionWasRetargeted, privacy: .public) cardRebased=\(cardOutcome.animationWasRebased, privacy: .public) fallback=\(geometry.usedDisplayFallback, privacy: .public) lastValid=false"
+            "Placement refresh revision=\(self.placementRevision, privacy: .public) logical=\(logicalPlacement.rawValue, privacy: .public) display=\(geometry.displayIdentity.diagnosticsToken, privacy: .public) oldEdge=\(catOutcome.previousDockEdge.rawValue, privacy: .public) newEdge=\(geometry.edge.rawValue, privacy: .public) confidence=\(geometry.geometryConfidence.rawValue, privacy: .public) calibration=\(!self.settings.preferences.calibration(for: geometry.displayIdentity, edge: geometry.edge).isZero, privacy: .public) motionRetargeted=\(catOutcome.motionWasRetargeted, privacy: .public) cardRebased=\(cardOutcome.animationWasRebased, privacy: .public) fallback=\(geometry.usedDisplayFallback, privacy: .public) lastValid=false"
         )
     }
 

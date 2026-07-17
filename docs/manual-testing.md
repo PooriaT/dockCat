@@ -100,6 +100,36 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 - Inspect card-placement logs. They may contain only Dock edge, card dimensions, clamp and
   collision flags, placement revision, and degradation—never notification text or screen name.
 
+## Stable display selection and Dock calibration
+
+- In Automatic mode, move the pointer repeatedly between displays. Confirm DockCat stays on the
+  initially resolved main display. Disconnect that display and confirm fallback selects the current
+  main display; reconnect it and confirm Automatic does not jump back during this app run.
+- Select Main display, change the system main display, and confirm placement follows it. Select a
+  specific display, relaunch, and confirm the stable selection returns when public identity permits.
+- Disconnect a specifically selected display. Confirm Settings preserves a disconnected row and
+  warning, preview stops, runtime placement uses a non-pointer fallback, and no overlay moves to
+  `(0, 0)`. Reconnect while sleeping and confirm immediate restoration. Reconnect during travel or
+  presentation and confirm restoration waits until that presentation finishes and reaches sleeping.
+- If two connected displays have identical localized names, confirm their short identity tokens
+  distinguish the picker rows and choosing either resolves the intended geometry.
+- Move the Dock between bottom, left, and right. Confirm Position shows the inferred edge and an
+  observed, auto-hide, or ambiguous confidence. Enable auto-hide and confirm the UI labels geometry
+  as estimated and recommends calibration rather than claiming exact Dock ends.
+- Start Preview and adjust all four calibration controls. Confirm blue Home and orange Presentation
+  markers move independently, remain click-through/on-screen, and the notification queue, active
+  presentation, and transient timer are unchanged. Close Settings, disable DockCat, or remove the
+  selected display and confirm both markers disappear.
+- Save distinct calibration values on two displays and on two Dock edges, relaunch, and verify each
+  record returns only for its display/edge. Use Reset Current and Reset All and confirm the expected
+  records return to zero without changing unrelated preferences.
+- Change calibration while sleeping, travelling out, presenting, travelling home, and returning.
+  Confirm the cat moves immediately at stable anchors, active cat/card stay together, travel retargets
+  without a new notification session, and return retargets home.
+- Inspect diagnostics. They may contain only short display tokens, selection mode, availability,
+  fallback use, Dock edge/confidence, calibration presence, and preview start/stop—not full display
+  serials, hardware fingerprints, localized display names, or notification content.
+
 ## Effect-driven transitions and recovery
 
 - Send an internal transient notification and confirm the complete wake, pickup, travel, presentation, timeout, card dismissal, return, settle, and sleep flow.

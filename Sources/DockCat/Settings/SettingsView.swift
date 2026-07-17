@@ -20,18 +20,76 @@ struct SettingsView: View {
                 if let error = state.settings.loginItemError { Text(error).foregroundStyle(.red).font(.caption) }
             }.padding().tabItem { Label("General", systemImage: "gear") }.tag(0)
             Form {
-                Picker("Display", selection: binding(\.displaySelection)) {
-                    Text("Automatic").tag("automatic")
-                    Text("Main display").tag("main")
-                    ForEach(NSScreen.screens, id: \.self) { screen in
-                        Text(screen.localizedName).tag(DockLocator.identifier(for: screen))
+                Section("Placement") {
+                    Picker("Display", selection: binding(\.displaySelection)) {
+                        Text("Automatic (stable)").tag(DisplaySelection.automatic)
+                        Text("Main display").tag(DisplaySelection.main)
+                        ForEach(state.displayCatalog.descriptors, id: \.identity) { display in
+                            Text(displayPickerTitle(display)).tag(DisplaySelection.specific(display.identity))
+                        }
+                        if selectedSpecificDisplayIsDisconnected,
+                           case .specific(let identity) = state.settings.preferences.displaySelection {
+                            Text("Selected display (disconnected)")
+                                .tag(DisplaySelection.specific(identity))
+                        }
+                    }
+                    if let placement = state.currentPlacement {
+                        LabeledContent("Resolved display", value: placement.displayName)
+                        LabeledContent("Dock edge", value: placement.edge.rawValue.capitalized)
+                        LabeledContent("Geometry", value: confidenceTitle(placement.geometryConfidence))
+                        if !placement.requestedDisplayAvailable {
+                            Label(
+                                "The selected display is disconnected. DockCat is using a temporary fallback without changing your preference.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            ).foregroundStyle(.orange)
+                        } else if placement.usedDisplayFallback,
+                                  case .specific = state.settings.preferences.displaySelection {
+                            Label(
+                                "The selected display has reconnected. DockCat will restore it after the active presentation finishes.",
+                                systemImage: "clock.arrow.circlepath"
+                            ).foregroundStyle(.orange)
+                        }
+                    }
+                    Picker("Sleeping corner", selection: binding(\.sleepingCorner)) {
+                        Text("Start of Dock").tag(DockCatPreferences.SleepingCorner.start)
+                        Text("End of Dock").tag(DockCatPreferences.SleepingCorner.end)
+                    }
+                    LabeledContent("Distance from Dock") {
+                        Slider(value: binding(\.positionOffset), in: -20...80).frame(width: 220)
+                    }
+                    LabeledContent("Trash-side adjustment") {
+                        Slider(value: binding(\.dockEndOffset), in: -300...300).frame(width: 220)
+                    }
+                    Slider(value: binding(\.cardOffset), in: 0...100) { Text("Card offset") }
+                    Slider(value: binding(\.catScale), in: 0.5...2) { Text("Cat scale") }
+                }
+
+                Section("Dock anchor calibration") {
+                    Text("macOS public APIs expose the Dock edge and an estimated inset, not its exact visual ends. Calibrate the current display and Dock edge in points.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let placement = state.currentPlacement,
+                       placement.geometryConfidence != .observedVisibleFrameInset {
+                        Label("Calibration is recommended for this estimated geometry.", systemImage: "ruler")
+                            .foregroundStyle(.orange)
+                    }
+                    calibrationSlider("Home along Dock", anchor: .home, axis: .alongDock, range: DockAnchorCalibration.alongDockRange)
+                    calibrationSlider("Home away from Dock", anchor: .home, axis: .awayFromDock, range: DockAnchorCalibration.awayFromDockRange)
+                    calibrationSlider("Presentation along Dock", anchor: .presentation, axis: .alongDock, range: DockAnchorCalibration.alongDockRange)
+                    calibrationSlider("Presentation away from Dock", anchor: .presentation, axis: .awayFromDock, range: DockAnchorCalibration.awayFromDockRange)
+                    HStack {
+                        Button("Reset Current") { resetCurrentCalibration() }
+                            .disabled(!canCalibrate)
+                        Button("Reset All") { state.settings.preferences.resetAllCalibrations() }
+                            .disabled(state.settings.preferences.dockCalibrations.isEmpty)
+                        Spacer()
+                        if state.isCalibrationPreviewActive {
+                            Button("Stop Preview") { state.stopCalibrationPreview() }
+                        } else {
+                            Button("Start Preview") { state.startCalibrationPreview() }
+                                .disabled(!canCalibrate || !state.settings.preferences.enabled)
+                        }
                     }
                 }
-                Picker("Sleeping corner", selection: binding(\.sleepingCorner)) { Text("Start of Dock").tag(DockCatPreferences.SleepingCorner.start); Text("End of Dock").tag(DockCatPreferences.SleepingCorner.end) }
-                LabeledContent("Distance from Dock") { Slider(value: binding(\.positionOffset), in: -20...80).frame(width: 220) }
-                LabeledContent("Trash-side adjustment") { Slider(value: binding(\.dockEndOffset), in: -300...300).frame(width: 220) }
-                Slider(value: binding(\.cardOffset), in: 0...100) { Text("Card offset") }
-                Slider(value: binding(\.catScale), in: 0.5...2) { Text("Cat scale") }
             }.padding().tabItem { Label("Position", systemImage: "dock.rectangle") }.tag(1)
             Form {
                 Stepper("Default duration: \(state.settings.preferences.defaultTransientDuration, specifier: "%.0f") seconds", value: binding(\.defaultTransientDuration), in: 1...60)
@@ -52,11 +110,97 @@ struct SettingsView: View {
             }.padding().tabItem { Label("Animation", systemImage: "figure.walk") }.tag(4)
             NotificationSimulatorView(state: state).padding().tabItem { Label("Developer", systemImage: "hammer") }.tag(5)
         }
-        .frame(width: 560, height: 430)
+        .frame(width: 600, height: 580)
         .onChange(of: state.settings.preferences) { _, _ in state.refreshPlacement() }
+        .onDisappear { state.stopCalibrationPreview() }
     }
     private func binding<T>(_ keyPath: WritableKeyPath<DockCatPreferences, T>) -> Binding<T> {
         Binding(get: { state.settings.preferences[keyPath: keyPath] }, set: { state.settings.preferences[keyPath: keyPath] = $0 })
+    }
+
+    private enum CalibrationAnchor { case home, presentation }
+    private enum CalibrationAxis { case alongDock, awayFromDock }
+
+    private var canCalibrate: Bool {
+        state.currentPlacement?.requestedDisplayAvailable == true
+    }
+
+    private var selectedSpecificDisplayIsDisconnected: Bool {
+        guard case .specific(let selected) = state.settings.preferences.displaySelection else { return false }
+        return !state.displayCatalog.descriptors.contains { $0.identity == selected }
+    }
+
+    private func displayPickerTitle(_ display: DisplayDescriptor) -> String {
+        let builtIn = display.isBuiltIn ? " — Built-in" : ""
+        return "\(display.localizedName)\(builtIn) · \(display.identity.diagnosticsToken)"
+    }
+
+    private func confidenceTitle(_ confidence: DockGeometryConfidence) -> String {
+        switch confidence {
+        case .observedVisibleFrameInset: "Observed visible-frame inset"
+        case .autoHideFallbackEstimate: "Auto-hide estimate"
+        case .ambiguousEstimate: "Ambiguous estimate"
+        }
+    }
+
+    @ViewBuilder
+    private func calibrationSlider(
+        _ title: String,
+        anchor: CalibrationAnchor,
+        axis: CalibrationAxis,
+        range: ClosedRange<Double>
+    ) -> some View {
+        LabeledContent(title) {
+            HStack {
+                Slider(value: calibrationBinding(anchor: anchor, axis: axis), in: range)
+                    .frame(width: 190)
+                Text("\(calibrationBinding(anchor: anchor, axis: axis).wrappedValue, specifier: "%.0f") pt")
+                    .monospacedDigit().frame(width: 52, alignment: .trailing)
+            }
+        }.disabled(!canCalibrate)
+    }
+
+    private func calibrationBinding(
+        anchor: CalibrationAnchor,
+        axis: CalibrationAxis
+    ) -> Binding<Double> {
+        Binding(
+            get: {
+                guard let placement = state.currentPlacement else { return 0 }
+                let calibration = state.settings.preferences.calibration(
+                    for: placement.displayIdentity, edge: placement.edge
+                )
+                return switch (anchor, axis) {
+                case (.home, .alongDock): calibration.home.alongDock
+                case (.home, .awayFromDock): calibration.home.awayFromDock
+                case (.presentation, .alongDock): calibration.presentation.alongDock
+                case (.presentation, .awayFromDock): calibration.presentation.awayFromDock
+                }
+            },
+            set: { value in
+                guard let placement = state.currentPlacement,
+                      placement.requestedDisplayAvailable else { return }
+                var calibration = state.settings.preferences.calibration(
+                    for: placement.displayIdentity, edge: placement.edge
+                )
+                switch (anchor, axis) {
+                case (.home, .alongDock): calibration.home = .init(alongDock: value, awayFromDock: calibration.home.awayFromDock)
+                case (.home, .awayFromDock): calibration.home = .init(alongDock: calibration.home.alongDock, awayFromDock: value)
+                case (.presentation, .alongDock): calibration.presentation = .init(alongDock: value, awayFromDock: calibration.presentation.awayFromDock)
+                case (.presentation, .awayFromDock): calibration.presentation = .init(alongDock: calibration.presentation.alongDock, awayFromDock: value)
+                }
+                state.settings.preferences.setCalibration(
+                    calibration, for: placement.displayIdentity, edge: placement.edge
+                )
+            }
+        )
+    }
+
+    private func resetCurrentCalibration() {
+        guard let placement = state.currentPlacement else { return }
+        state.settings.preferences.resetCalibration(
+            for: placement.displayIdentity, edge: placement.edge
+        )
     }
 }
 

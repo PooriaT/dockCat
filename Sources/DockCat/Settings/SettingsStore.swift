@@ -10,8 +10,14 @@ final class SettingsStore: ObservableObject {
     private let key = "DockCat.preferences.v1"
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: key), let value = try? JSONDecoder().decode(DockCatPreferences.self, from: data) { preferences = value }
-        else { preferences = DockCatPreferences() }
+        if let data = UserDefaults.standard.data(forKey: key),
+           let value = try? JSONDecoder().decode(DockCatPreferences.self, from: data) {
+            preferences = value
+            // Persist a successfully decoded legacy payload through the new encoder.
+            save()
+        } else {
+            preferences = DockCatPreferences()
+        }
     }
     var effectiveReducedMotion: Bool { preferences.reducedMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || preferences.disableWalking }
     var launchAtLogin: Bool { SMAppService.mainApp.status == .enabled }
