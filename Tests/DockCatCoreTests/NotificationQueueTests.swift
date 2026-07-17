@@ -202,6 +202,31 @@ final class NotificationQueueTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    func testExternalRemovalRacingCompletionAllowsAuthoritativeNextClaim() async {
+        let queue = DockCatCore.NotificationQueue()
+        let active = external("active"), pending = external("pending")
+        _ = await queue.enqueueAppeared(active)
+        _ = await queue.enqueueAppeared(pending)
+        _ = await queue.claimNext()
+
+        guard case .removedCurrent(let removed, _, let removalRevision) =
+                await queue.removeExternal(active.externalIdentity!) else {
+            return XCTFail("Expected external removal to win the race")
+        }
+        XCTAssertEqual(removed.id, active.id)
+        guard case .noCurrent(let completionRevision) =
+                await queue.completeCurrent(policy: .advanceImmediately) else {
+            return XCTFail("Completion must report the lifecycle race without mutating")
+        }
+        XCTAssertEqual(completionRevision, removalRevision)
+
+        guard case .promoted(let next, let claimRevision) = await queue.claimNext() else {
+            return XCTFail("Coordinator must be able to claim authoritatively after removal")
+        }
+        XCTAssertEqual(next.id, pending.id)
+        XCTAssertGreaterThan(claimRevision, completionRevision)
+    }
+
     func testRevisionChangesOnlyAfterAcceptedMutation() async {
         let queue = DockCatCore.NotificationQueue(limit: 1)
         let first = item("1")

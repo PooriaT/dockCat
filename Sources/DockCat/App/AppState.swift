@@ -77,6 +77,7 @@ final class AppState: ObservableObject {
     private var recoveryGate = CatRecoveryGate()
     private var requestedPauseState = false
     private var observedQueueRevision: NotificationQueueRevision = 0
+    private var currentProjectionRevision: NotificationQueueRevision = 0
     private var lifecycleReconciliationTask: Task<Void, Never>?
     private var deferredExternalUpdates: [ExternalNotificationIdentity: DeferredExternalUpdate] = [:]
     private var deferredExternalDisappearances: [ExternalNotificationIdentity: DeferredExternalRemoval] = [:]
@@ -96,7 +97,7 @@ final class AppState: ObservableObject {
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled, let self else { return }
                 let outcomes = await systemNotificationPipeline.reconcile()
-                for outcome in outcomes { self.applyExternalMutation(outcome.queueMutation) }
+                for outcome in outcomes { await self.applyExternalMutation(outcome.queueMutation) }
             }
         }
     }
@@ -106,7 +107,7 @@ final class AppState: ObservableObject {
     private func clearExternalNotifications() {
         Task {
             let outcomes = await systemNotificationPipeline.sourceStopped()
-            for outcome in outcomes { applyExternalMutation(outcome.queueMutation) }
+            for outcome in outcomes { await applyExternalMutation(outcome.queueMutation) }
         }
     }
 
@@ -163,7 +164,7 @@ final class AppState: ObservableObject {
                     logger.info("Native banner dismissal outcome=\(String(describing: outcome), privacy: .public)")
                     if outcome == .permissionRequired { systemNotificationAccess.sourceDidLosePermission() }
                 }
-                applyExternalMutation(result.queueMutation)
+                await applyExternalMutation(result.queueMutation)
             }
         }
     }
@@ -172,15 +173,17 @@ final class AppState: ObservableObject {
         guard settings.preferences.enabled else { return }
         Task {
             observeQueueRevision((await queue.setLimit(settings.preferences.queueLimit)).revision)
-            applyExternalMutation(await queue.enqueueAppeared(notification))
+            await applyExternalMutation(await queue.enqueueAppeared(notification))
         }
     }
 
     private func handleExternalUpdate(_ notification: DockCatNotification) {
-        Task { applyExternalMutation(await queue.updateExternal(notification)) }
+        Task { await applyExternalMutation(await queue.updateExternal(notification)) }
     }
 
-    private func applyExternalMutation(_ mutation: DockCatCore.NotificationQueue.ExternalMutationResult?) {
+    private func applyExternalMutation(
+        _ mutation: DockCatCore.NotificationQueue.ExternalMutationResult?
+    ) async {
         guard let mutation else { return }
         guard observeQueueRevision(mutation.revision) else {
             // A stale insertion is still stored. Starting a claim is safe because the actor
@@ -189,7 +192,7 @@ final class AppState: ObservableObject {
             case .inserted:
                 beginFlowIfNeeded()
             case .updatedCurrent, .unchangedCurrent, .removedCurrent:
-                failQueueReconciliation(context: "stale external current mutation")
+                await reconcileSupersededExternalMutation(mutation)
             case .updatedPending, .unchangedPending, .removedPending, .notFound, .duplicate, .full:
                 break
             }
@@ -205,7 +208,43 @@ final class AppState: ObservableObject {
         case .updatedPending, .unchangedPending, .removedPending, .notFound, .duplicate, .full:
             break
         case .removedCurrent(let notification, _, let revision):
+            if current?.id == notification.id {
+                dismissSourceCurrent(notification, revision: revision)
+            } else if dismissingNotification?.id == notification.id {
+                if let identity = notification.externalIdentity {
+                    deferredExternalDisappearances.removeValue(forKey: identity)
+                    deferredExternalUpdates.removeValue(forKey: identity)
+                }
+            } else {
+                await reconcileSupersededExternalMutation(mutation)
+            }
+        }
+    }
+
+    /// A newer queue result may reach the main actor before an older lifecycle result.
+    /// Consult the latest identity-only snapshot and apply the older payload only when it
+    /// still describes the actor's authoritative current state. Superseded results are no-ops.
+    private func reconcileSupersededExternalMutation(
+        _ mutation: DockCatCore.NotificationQueue.ExternalMutationResult
+    ) async {
+        let snapshot = await queue.snapshot()
+        _ = observeQueueRevision(snapshot.revision)
+
+        switch mutation {
+        case .updatedCurrent(let notification, let revision),
+             .unchangedCurrent(let notification, let revision):
+            guard snapshot.currentID == notification.id,
+                  current?.id == notification.id,
+                  revision >= currentProjectionRevision else { return }
+            replaceUpdatedCurrent(notification, revision: revision)
+        case .removedCurrent(let notification, _, let revision):
+            guard snapshot.currentID != notification.id,
+                  current?.id == notification.id,
+                  revision >= currentProjectionRevision else { return }
             dismissSourceCurrent(notification, revision: revision)
+        case .inserted, .updatedPending, .unchangedPending, .removedPending,
+             .notFound, .duplicate, .full:
+            break
         }
     }
 
@@ -223,12 +262,12 @@ final class AppState: ObservableObject {
         }
         deferredExternalUpdates.removeValue(forKey: identity)
         timeoutTask?.cancel()
-        current = notification
+        projectCurrent(notification, revision: revision)
         startFlow(with: .notificationUpdated)
     }
 
     private func handleExternalDisappearance(_ identity: ExternalNotificationIdentity) {
-        Task { applyExternalMutation(await queue.removeExternal(identity)) }
+        Task { await applyExternalMutation(await queue.removeExternal(identity)) }
     }
 
     private func dismissSourceCurrent(_ notification: DockCatNotification, revision: NotificationQueueRevision) {
@@ -248,7 +287,7 @@ final class AppState: ObservableObject {
         deferredExternalUpdates.removeValue(forKey: identity)
         timeoutTask?.cancel()
         dismissingNotification = notification
-        current = nil
+        projectNoCurrent(revision: revision)
         startDismissal(with: .sourceDisappeared)
     }
 
@@ -340,8 +379,8 @@ final class AppState: ObservableObject {
             return false
         }
         switch decision {
-        case .promoted(let notification, _), .current(let notification, _):
-            current = notification
+        case .promoted(let notification, let revision), .current(let notification, let revision):
+            projectCurrent(notification, revision: revision)
             return true
         case .paused, .idle:
             return false
@@ -483,49 +522,78 @@ final class AppState: ObservableObject {
         // An external disappearance has already removed the actor's current item. Claiming
         // here is the single atomic selection that preserves stay-at-presentation behavior.
         if dismissingNotification != nil, current == nil {
-            guard settings.preferences.remainForQueuedMessages else {
-                return .completed(nextEvent: .queueEmpty)
-            }
-            let claim = await queue.claimNext()
-            guard observeQueueRevision(claim.revision) else { return failClosed(effect) }
-            switch claim {
-            case .promoted(let next, _), .current(let next, _):
-                current = next
-                dismissingNotification = nil
-                guard await reconcileQueueProjection(context: "claim after external removal") else {
-                    return .cancelled
-                }
-                return .completed(nextEvent: .nextNotificationAvailable)
-            case .idle:
-                return .completed(nextEvent: .queueEmpty)
-            case .paused:
-                return .cancelled
-            }
+            return await claimAfterExternalRemoval(effect: effect)
         }
 
         let policy: DockCatCore.NotificationQueue.CompletionPolicy = settings.preferences.remainForQueuedMessages
             ? .advanceImmediately
             : .leavePendingForLater
         let decision = await queue.completeCurrent(policy: policy)
-        guard observeQueueRevision(decision.revision) else { return failClosed(effect) }
+        let isFreshDecision = observeQueueRevision(decision.revision)
+        if !isFreshDecision, case .noCurrent = decision {
+            // Continue below: a later pending-only mutation may have advanced the observed
+            // revision even though the external removal still authoritatively cleared current.
+        } else if !isFreshDecision {
+            return failClosed(effect)
+        }
 
         switch decision {
-        case .advanced(let completed, let next, _):
+        case .advanced(let completed, let next, let revision):
             guard current?.id == completed.id else { return failClosed(effect) }
-            current = next
+            projectCurrent(next, revision: revision)
             dismissingNotification = nil
             guard await reconcileQueueProjection(context: "completion and advance") else { return .cancelled }
             return .completed(nextEvent: .nextNotificationAvailable)
-        case .completedAndIdle(let completed, _),
-             .completedWithPending(let completed, _, _),
-             .pausedAfterCompletion(let completed, _, _):
+        case .completedAndIdle(let completed, let revision),
+             .completedWithPending(let completed, _, let revision),
+             .pausedAfterCompletion(let completed, _, let revision):
             guard current?.id == completed.id else { return failClosed(effect) }
-            current = nil
+            projectNoCurrent(revision: revision)
             dismissingNotification = completed
             guard await reconcileQueueProjection(context: "completion without advance") else { return .cancelled }
             return .completed(nextEvent: .queueEmpty)
-        case .noCurrent:
-            return failClosed(effect)
+        case .noCurrent(let revision):
+            guard revision >= currentProjectionRevision,
+                  let removed = current, removed.externalIdentity != nil else {
+                return failClosed(effect)
+            }
+            // The source actor won the race with timeout/user completion. Treat the
+            // projected external item as the removed card and continue normal choreography.
+            dismissingNotification = removed
+            projectNoCurrent(revision: revision)
+            if let identity = removed.externalIdentity {
+                deferredExternalUpdates.removeValue(forKey: identity)
+                deferredExternalDisappearances.removeValue(forKey: identity)
+            }
+            return await claimAfterExternalRemoval(effect: effect)
+        }
+    }
+
+    private func claimAfterExternalRemoval(effect: CatCoordinatorEffect) async -> CatEffectExecutionOutcome {
+        guard settings.preferences.remainForQueuedMessages else {
+            guard await reconcileQueueProjection(context: "external removal without advance") else {
+                return .cancelled
+            }
+            return .completed(nextEvent: .queueEmpty)
+        }
+
+        let claim = await queue.claimNext()
+        guard observeQueueRevision(claim.revision) else { return failClosed(effect) }
+        switch claim {
+        case .promoted(let next, let revision), .current(let next, let revision):
+            projectCurrent(next, revision: revision)
+            dismissingNotification = nil
+            guard await reconcileQueueProjection(context: "claim after external removal") else {
+                return .cancelled
+            }
+            return .completed(nextEvent: .nextNotificationAvailable)
+        case .idle:
+            guard await reconcileQueueProjection(context: "idle after external removal") else {
+                return .cancelled
+            }
+            return .completed(nextEvent: .queueEmpty)
+        case .paused:
+            return .completed(nextEvent: .queueEmpty)
         }
     }
 
@@ -629,6 +697,21 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func projectCurrent(
+        _ notification: DockCatNotification,
+        revision: NotificationQueueRevision
+    ) {
+        guard revision >= currentProjectionRevision else { return }
+        current = notification
+        currentProjectionRevision = revision
+    }
+
+    private func projectNoCurrent(revision: NotificationQueueRevision) {
+        guard revision >= currentProjectionRevision else { return }
+        current = nil
+        currentProjectionRevision = revision
+    }
+
     @discardableResult
     private func observeQueueRevision(_ revision: NotificationQueueRevision) -> Bool {
         guard revision >= observedQueueRevision else {
@@ -695,7 +778,7 @@ final class AppState: ObservableObject {
         dismissingNotification = nil
         let completion = await queue.completeCurrent(policy: .leavePendingForLater)
         _ = observeQueueRevision(completion.revision)
-        current = nil
+        projectNoCurrent(revision: completion.revision)
         requestedPauseState = false
         let pause = await queue.setPaused(false)
         _ = observeQueueRevision(pause.revision)
