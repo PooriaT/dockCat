@@ -19,16 +19,17 @@ final class ExternalNotificationLifecycleTests: XCTestCase, @unchecked Sendable 
         let duplicateRemoval = await tracker.remove(first.identity); XCTAssertEqual(duplicateRemoval, .unsupportedOrdering)
     }
 
-    func testExpiryCapacityAndShutdownAreBoundedAndDeterministic() async {
+    func testReconciliationPreservesSilentItemsAndShutdownIsDeterministic() async {
         final class TimeBox: @unchecked Sendable { var value = Date(timeIntervalSince1970: 0) }
         let time = TimeBox()
         let tracker = ExternalNotificationLifecycleTracker(capacity: 2, reconciliationTimeout: 5, now: { time.value })
         _ = await tracker.observe(external("a")); _ = await tracker.observe(external("b"))
         let overflow = await tracker.observe(external("c")); XCTAssertEqual(overflow, .unsupportedOrdering)
         time.value = Date(timeIntervalSince1970: 6)
-        let expired = await tracker.reconcile(); XCTAssertEqual(expired, [.disappeared(external("a").identity), .disappeared(external("b").identity)])
-        _ = await tracker.observe(external("new"))
-        let stopped = await tracker.sourceStopped(); XCTAssertEqual(stopped, [.disappeared(external("new").identity)])
+        let reconciled = await tracker.reconcile(); XCTAssertTrue(reconciled.isEmpty)
+        let countBeforeStop = await tracker.count(); XCTAssertEqual(countBeforeStop, 2)
+        let stopped = await tracker.sourceStopped()
+        XCTAssertEqual(stopped, [.disappeared(external("a").identity), .disappeared(external("b").identity)])
         let count = await tracker.count(); XCTAssertEqual(count, 0)
     }
 

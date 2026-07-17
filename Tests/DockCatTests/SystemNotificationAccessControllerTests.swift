@@ -53,6 +53,19 @@ import XCTest
         XCTAssertEqual(controller.health.state, .starting)
     }
 
+    func testRecoverableUnavailableKeepsSourceRunning() {
+        let source = SourceFake()
+        let controller = SystemNotificationAccessController(enabled: true, trust: TrustFake(true), source: source)
+
+        controller.sourceDidBecomeUnavailable()
+
+        XCTAssertEqual(controller.health, .init(.unavailable, reason: .processUnavailable))
+        XCTAssertEqual(source.stops, 0)
+        controller.sourceDidStart()
+        XCTAssertEqual(controller.health.state, .active)
+        XCTAssertEqual(source.starts, 1)
+    }
+
     func testDeferredStartupCanInstallSynchronousOutcomeHandlerFirst() {
         let source = SourceFake()
         let controller = SystemNotificationAccessController(

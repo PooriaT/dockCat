@@ -7,7 +7,7 @@ final class NotificationFingerprintAndCacheTests: XCTestCase, @unchecked Sendabl
         let candidate = try AccessibilityNotificationParser().parse(AXFixtures.banner()).get()
         let first = NotificationFingerprint.make(for: candidate)
         XCTAssertEqual(first, NotificationFingerprint.make(for: candidate))
-        XCTAssertEqual(first.rawValue, "47b66fbff0f513260505b1e4a2da22a01f1073098658b02459e2711932601f54")
+        XCTAssertEqual(first.rawValue, "1fbe539c25efba8590eb55b2837fdbce77beef2798a7d1caea884965bd2abb97")
         XCTAssertEqual(first.rawValue.count, 64)
     }
     func testEquivalentCallbacksMatchButDistinctBodiesDoNot() throws {

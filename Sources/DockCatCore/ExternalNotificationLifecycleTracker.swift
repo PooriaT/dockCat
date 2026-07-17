@@ -1,30 +1,25 @@
 import Foundation
 
-/// Serialized lifecycle reconciliation. Expiry is driven by one source-level sweep,
-/// rather than by creating a task for every observed item.
+/// Serialized lifecycle reconciliation for notifications whose disappearance is
+/// reported explicitly by their source.
 public actor ExternalNotificationLifecycleTracker {
     public enum ObservationResult: Equatable, Sendable { case event(NotificationSourceEvent), unchanged, unsupportedOrdering }
-    private struct Entry: Sendable { var value: ExternalNotification; var lastSeen: Date }
-    private var visible: [ExternalNotificationIdentity: Entry] = [:]
+    private var visible: [ExternalNotificationIdentity: ExternalNotification] = [:]
     private let capacity: Int
-    private let reconciliationTimeout: TimeInterval
-    private let now: @Sendable () -> Date
 
-    public init(capacity: Int = 64, reconciliationTimeout: TimeInterval = 12,
-                now: @escaping @Sendable () -> Date = Date.init) {
-        self.capacity = max(1, capacity); self.reconciliationTimeout = max(0, reconciliationTimeout); self.now = now
+    public init(capacity: Int = 64, reconciliationTimeout _: TimeInterval = 12,
+                now _: @escaping @Sendable () -> Date = Date.init) {
+        self.capacity = max(1, capacity)
     }
 
     public func observe(_ value: ExternalNotification) -> ObservationResult {
-        let timestamp = now()
-        if var old = visible[value.identity] {
-            old.lastSeen = timestamp
-            guard !old.value.notification.semanticallyEquals(value.notification) else { visible[value.identity] = old; return .unchanged }
-            old.value = value; visible[value.identity] = old
+        if let old = visible[value.identity] {
+            guard !old.notification.semanticallyEquals(value.notification) else { return .unchanged }
+            visible[value.identity] = value
             return .event(.updated(value))
         }
         guard visible.count < capacity else { return .unsupportedOrdering }
-        visible[value.identity] = Entry(value: value, lastSeen: timestamp)
+        visible[value.identity] = value
         return .event(.appeared(value))
     }
 
@@ -34,10 +29,10 @@ public actor ExternalNotificationLifecycleTracker {
     }
 
     public func reconcile() -> [NotificationSourceEvent] {
-        let cutoff = now().addingTimeInterval(-reconciliationTimeout)
-        let expired = visible.filter { $0.value.lastSeen <= cutoff }.map(\.key).sorted { $0.stableItemIdentifier < $1.stableItemIdentifier }
-        for identity in expired { visible.removeValue(forKey: identity) }
-        return expired.map(NotificationSourceEvent.disappeared)
+        // Silence is not evidence of disappearance: Accessibility does not emit
+        // callbacks for an unchanged banner and this source has no authoritative
+        // tree rescan. Items remain visible until a destruction or source-stop event.
+        []
     }
 
     /// Source stop and permission loss immediately disappear every external item.

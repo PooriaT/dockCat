@@ -32,6 +32,35 @@ import XCTest
         resolver.resolution = .resolved(.init(bundleIdentifier: "com.apple.notificationcenterui", processIdentifier: 2, localizedName: nil)); resolver.changed?()
         XCTAssertEqual(api.observers, 2); XCTAssertEqual(api.detaches, 1)
     }
+    func testUnavailableDuringRestartKeepsLaunchMonitorActive() {
+        let api = SourceAXFake(), resolver = ResolverFake(.resolved(.init(bundleIdentifier: "com.apple.notificationcenterui", processIdentifier: 1, localizedName: nil)))
+        var outcomes: [SystemNotificationAccessibilitySource.Outcome] = []
+        let source = make(SourceTrustFake(true), resolver, api) { outcomes.append($0) }
+        source.start()
+
+        resolver.resolution = .unavailable; resolver.changed?()
+        XCTAssertEqual(outcomes.last, .unavailable)
+        XCTAssertNotNil(resolver.changed)
+
+        resolver.resolution = .resolved(.init(bundleIdentifier: "com.apple.notificationcenterui", processIdentifier: 2, localizedName: nil)); resolver.changed?()
+        XCTAssertEqual(outcomes.last, .active)
+        XCTAssertEqual(api.observers, 2)
+    }
+    func testDistinctElementsAreCoalescedIndependently() async {
+        let api = SourceAXFake(), resolver = ResolverFake(.resolved(.init(bundleIdentifier: "com.apple.notificationcenterui", processIdentifier: 1, localizedName: nil)))
+        var snapshots = 0
+        let source = SystemNotificationAccessibilitySource(
+            trust: SourceTrustFake(true), resolver: resolver, client: api,
+            eventHandler: { _ in snapshots += 1 }, outcomeHandler: { _ in }
+        )
+        source.start()
+
+        api.callback?(SourceElement(101), "AXCreated")
+        api.callback?(SourceElement(202), "AXCreated")
+        try? await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(snapshots, 2)
+    }
     private func make(_ trust: SourceTrustFake, _ resolver: ResolverFake, _ api: SourceAXFake,
                       outcome: @escaping (SystemNotificationAccessibilitySource.Outcome) -> Void) -> SystemNotificationAccessibilitySource {
         .init(trust: trust, resolver: resolver, client: api, eventHandler: { _ in }, outcomeHandler: outcome)
@@ -53,8 +82,9 @@ import XCTest
 @MainActor private final class SourceObserver: AccessibilityObserverReference {}
 @MainActor private final class SourceAXFake: AccessibilityAPIClientProtocol {
     var adds = 0, removes = 0, observers = 0, detaches = 0; var failAfter: Int?
+    var callback: ((any AccessibilityElementReference, String) -> Void)?
     func application(processIdentifier: pid_t) -> any AccessibilityElementReference { SourceElement(Int(processIdentifier)) }
-    func makeObserver(processIdentifier: pid_t, callback: @escaping (any AccessibilityElementReference, String) -> Void) throws -> any AccessibilityObserverReference { observers += 1; return SourceObserver() }
+    func makeObserver(processIdentifier: pid_t, callback: @escaping (any AccessibilityElementReference, String) -> Void) throws -> any AccessibilityObserverReference { observers += 1; self.callback = callback; return SourceObserver() }
     func attach(_ observer: any AccessibilityObserverReference) {}
     func detach(_ observer: any AccessibilityObserverReference) { detaches += 1 }
     func add(notification: String, element: any AccessibilityElementReference, observer: any AccessibilityObserverReference) throws {

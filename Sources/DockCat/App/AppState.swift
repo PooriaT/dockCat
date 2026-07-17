@@ -32,7 +32,7 @@ final class AppState: ObservableObject {
             switch outcome {
             case .active: controller.sourceDidStart()
             case .degraded: controller.sourceDidDegrade()
-            case .unavailable: controller.sourceDidFailToStart()
+            case .unavailable: controller.sourceDidBecomeUnavailable()
             case .permissionRequired:
                 controller.sourceDidLosePermission()
                 self?.clearExternalNotifications()

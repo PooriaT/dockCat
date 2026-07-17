@@ -71,6 +71,11 @@ final class SystemNotificationAccessController: ObservableObject {
 
     func sourceDidStart() { guard acceptsSourceCallback else { return }; transition(to: .init(.active)) }
     func sourceDidDegrade() { guard acceptsSourceCallback else { return }; transition(to: .init(.degraded, reason: .compatibilityProblem)) }
+    /// Reports a recoverable outage without stopping the source's process monitor.
+    func sourceDidBecomeUnavailable() {
+        guard acceptsSourceCallback else { return }
+        transition(to: .init(.unavailable, reason: .processUnavailable))
+    }
     func sourceDidFailToStart() {
         guard acceptsSourceCallback else { return }
         stopSource()

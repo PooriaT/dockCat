@@ -3,7 +3,7 @@ import XCTest
 
 final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
     func testDuplicateDoesNotReachQueueAndInternalEventsRemainDirect() async {
-        let queue = NotificationQueue(limit: 5)
+        let queue = DockCatCore.NotificationQueue(limit: 5)
         let pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "com.example.DockCat")
         let accepted = await pipeline.ingest(AXFixtures.banner(sequence: 1), transientDuration: 7)
         let duplicate = await pipeline.ingest(AXFixtures.banner(sequence: 2), transientDuration: 7)
@@ -17,14 +17,14 @@ final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
         XCTAssertNotNil(first?.externalIdentity)
     }
     func testQueueFullRollsBackDeduplicationReservation() async {
-        let queue = NotificationQueue(limit: 1); _ = await queue.enqueue(.init(sourceName: "Internal", title: "", message: "Invented"))
+        let queue = DockCatCore.NotificationQueue(limit: 1); _ = await queue.enqueue(.init(sourceName: "Internal", title: "", message: "Invented"))
         let pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "com.example.DockCat")
         let full = await pipeline.ingest(AXFixtures.banner(), transientDuration: 5); XCTAssertEqual(full, .queueFull)
         _ = await queue.next(); _ = await queue.completeCurrent()
         let retried = await pipeline.ingest(AXFixtures.banner(sequence: 2), transientDuration: 5); XCTAssertEqual(retried, .enqueued)
     }
     func testSelfOriginAndWidgetNeverReachQueue() async {
-        let queue = NotificationQueue()
+        let queue = DockCatCore.NotificationQueue()
         let pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "com.example.DockCat")
         let own = await pipeline.ingest(AXFixtures.banner(bundle: "com.example.DockCat"), transientDuration: 5)
         let widget = await pipeline.ingest(AXFixtures.widget, transientDuration: 5)
@@ -32,7 +32,7 @@ final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(own, .rejected(.excludedOrigin)); XCTAssertEqual(widget, .rejected(.unrelatedStructure)); XCTAssertEqual(count, 0)
     }
     func testDestroyedSnapshotNeverEnqueues() async {
-        let queue = NotificationQueue()
+        let queue = DockCatCore.NotificationQueue()
         let pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "com.example.DockCat")
         let source = AXFixtures.banner()
         let destroyed = AccessibilityNotificationSnapshot(origin: source.origin, observationKind: .destroyed,
@@ -52,14 +52,31 @@ final class SystemNotificationPipelineTests: XCTestCase, @unchecked Sendable {
                     .init(role: "AXStaticText", identifier: "message", value: body)
                   ]), observedElementIdentifier: observed)
         }
-        let queue = NotificationQueue(), pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "dockcat")
+        let queue = DockCatCore.NotificationQueue(), pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "dockcat")
         let first = await pipeline.ingest(snapshot(sequence: 1, observed: "leaf.a", body: "First"), transientDuration: 5); XCTAssertEqual(first, .enqueued)
         let second = await pipeline.ingest(snapshot(sequence: 2, observed: "leaf.b", body: "Second"), transientDuration: 5); XCTAssertEqual(second, .enqueued)
         let count = await queue.count(); XCTAssertEqual(count, 2)
     }
 
+    func testFallbackIdentityIgnoresPerCallbackDismissalToken() async {
+        func snapshot(sequence: UInt64, token: String) -> AccessibilityNotificationSnapshot {
+            .init(origin: .init(bundleIdentifier: "com.apple.notificationcenterui", processIdentifier: 42),
+                  observationKind: .created, captureSequence: sequence,
+                  root: .init(role: "AXGroup", subrole: "AXNotificationBanner", children: [
+                    .init(role: "AXStaticText", identifier: "appName", value: "Example"),
+                    .init(role: "AXStaticText", identifier: "message", value: "Same banner")
+                  ]), opaqueDismissalTokenIdentifier: token)
+        }
+        let queue = DockCatCore.NotificationQueue(), pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "dockcat")
+        let first = await pipeline.ingest(snapshot(sequence: 1, token: "uuid-1"), transientDuration: 5)
+        let repeated = await pipeline.ingest(snapshot(sequence: 2, token: "uuid-2"), transientDuration: 5)
+        XCTAssertEqual(first, .enqueued)
+        XCTAssertEqual(repeated, .duplicate)
+        let count = await queue.count(); XCTAssertEqual(count, 1)
+    }
+
     func testDescendantDestructionUsesParserSelectedContainerIdentity() async {
-        let queue = NotificationQueue(), pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "dockcat")
+        let queue = DockCatCore.NotificationQueue(), pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: "dockcat")
         let appeared = AXFixtures.banner()
         let insert = await pipeline.ingest(appeared, transientDuration: 5); XCTAssertEqual(insert, .enqueued)
         let destroyed = AccessibilityNotificationSnapshot(

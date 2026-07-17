@@ -10,11 +10,11 @@ public struct NotificationFingerprint: RawRepresentable, Hashable, Sendable, Cod
     public static func make(for candidate: AccessibilityNotificationCandidate) -> Self {
         // Length-prefixing prevents ambiguous concatenation. Each visible field is digested before it
         // joins the structural material, so callers/cache records never need to retain notification text.
+        // Dismissal tokens are capabilities refreshed per snapshot, not notification identity material.
         let values = [candidate.sourceDisplayName, candidate.title, candidate.message].map(fieldDigest)
         let parts = [
             candidate.sourceBundleIdentifier ?? "-", candidate.structuralKind.rawValue,
-            candidate.capture.stableContainerIdentifier ?? "-", candidate.capture.coarseStructuralSignature,
-            candidate.opaqueDismissalTokenIdentifier ?? "-"
+            candidate.capture.stableContainerIdentifier ?? "-", candidate.capture.coarseStructuralSignature
         ] + values
         let material = parts.map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
         return .init(rawValue: StableSHA256.hex(Data(material.utf8)))

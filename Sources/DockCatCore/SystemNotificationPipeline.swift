@@ -112,8 +112,6 @@ public actor SystemNotificationPipeline {
         let stable: String
         if let container = candidate.capture.stableContainerIdentifier {
             stable = container
-        } else if let token = candidate.opaqueDismissalTokenIdentifier {
-            stable = token
         } else {
             // A content fingerprint is preferable to a coarse hierarchy here: it
             // distinguishes simultaneous identical-shaped banners. Subsequent

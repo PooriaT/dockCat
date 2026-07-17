@@ -20,7 +20,7 @@ import OSLog
     private var application: (any AccessibilityElementReference)?
     private var registrations = Set<String>()
     private var process: NotificationCenterProcess?
-    private var pendingSnapshot: Task<Void, Never>?
+    private var pendingSnapshots: [Int: Task<Void, Never>] = [:]
     private var sequence: UInt64 = 0
     private var started = false
 
@@ -42,7 +42,7 @@ import OSLog
     }
     func stop() { stop(report: false) }
     private func stop(report: Bool) {
-        guard started || observer != nil else { return }; started = false; pendingSnapshot?.cancel(); pendingSnapshot = nil
+        guard started || observer != nil else { return }; started = false; cancelPendingSnapshots()
         detachObserver(); resolver.stopMonitoring(); logger.info("Accessibility source stopped")
         if report { outcomeHandler(.permissionRequired) }
     }
@@ -77,15 +77,16 @@ import OSLog
     }
     private func detachObserver() {
         dismissalRegistry.removeAll()
-        pendingSnapshot?.cancel(); pendingSnapshot = nil
+        cancelPendingSnapshots()
         if let observer, let application { for notification in registrations { client.remove(notification: notification, element: application, observer: observer) }; client.detach(observer) }
         registrations.removeAll(); observer = nil; application = nil; process = nil
     }
     private func processChanged() { guard started else { return }; logger.info("Notification Center lifecycle event; resolving again"); attachResolvedProcess() }
     private func observed(_ changed: any AccessibilityElementReference, notification: String) {
         guard started else { return }; guard trust.isTrusted() else { stop(report: true); return }
-        pendingSnapshot?.cancel()
-        pendingSnapshot = Task { @MainActor [weak self] in
+        let elementIdentifier = changed.traversalIdentifier
+        pendingSnapshots[elementIdentifier]?.cancel()
+        pendingSnapshots[elementIdentifier] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(40)); guard !Task.isCancelled, let self, let process else { return }
             let candidate = (try? client.element(.parent, of: changed)) ?? changed
             sequence &+= 1
@@ -102,8 +103,12 @@ import OSLog
                 opaqueDismissalTokenIdentifier: dismissalToken?.identifier)
             logger.info("AX candidate snapshot count=\(self.sequence, privacy: .public), truncations=\(result.truncatedNodeCount, privacy: .public)")
             eventHandler(.accessibilitySnapshot(result.snapshot))
-            pendingSnapshot = nil
+            pendingSnapshots[elementIdentifier] = nil
         }
+    }
+    private func cancelPendingSnapshots() {
+        pendingSnapshots.values.forEach { $0.cancel() }
+        pendingSnapshots.removeAll(keepingCapacity: true)
     }
     private static func kind(_ name: String) -> AccessibilityNotificationSnapshot.ObservationKind {
         switch name { case kAXCreatedNotification as String: .created; case kAXChildrenChangedNotification as String: .childrenChanged
