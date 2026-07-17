@@ -196,10 +196,26 @@ final class CatWindowController {
     func prepareHandoffPose() { scene.prepareHandoffPose() }
     func completeHandoffPose() { scene.completeHandoffPose() }
 
+    private static func handoffSourceRect(forVisualAnchor anchor: CGPoint) -> CGRect {
+        let center = CGPoint(x: anchor.x + 42, y: anchor.y + 38)
+        return CGRect(x: center.x - 18, y: center.y - 12, width: 36, height: 24)
+    }
+
+    /// The live handoff location follows the panel during travel and is the correct target
+    /// for rebasing an in-progress dismissal animation.
     func handoffSourceRect() -> CGRect {
         let origin = panel.frame.origin
-        let center = CGPoint(x: origin.x + AnchorOffset.x + 42, y: origin.y + AnchorOffset.y + 38)
-        return CGRect(x: center.x - 18, y: center.y - 12, width: 36, height: 24)
+        let currentVisualAnchor = CGPoint(
+            x: origin.x + AnchorOffset.x,
+            y: origin.y + AnchorOffset.y
+        )
+        return Self.handoffSourceRect(forVisualAnchor: currentVisualAnchor)
+    }
+
+    /// Card planning protects the destination handoff location even while the panel is still
+    /// travelling from an older screen or Dock edge.
+    func presentationExclusionFrame() -> CGRect {
+        Self.handoffSourceRect(forVisualAnchor: presentationPoint)
     }
     func pause() { isMotionPaused = true; motionDriver.cancelActiveMotion(); scene.isPaused = true }
     func resume() {

@@ -3,7 +3,19 @@ import Foundation
 public struct Rect: Equatable, Sendable {
     public var x, y, width, height: Double
     public init(x: Double, y: Double, width: Double, height: Double) { self.x=x; self.y=y; self.width=width; self.height=height }
+    public var minX: Double { x }; public var minY: Double { y }
     public var maxX: Double { x + width }; public var maxY: Double { y + height }
+    public var midX: Double { x + width / 2 }; public var midY: Double { y + height / 2 }
+}
+
+public struct Point: Equatable, Sendable {
+    public var x, y: Double
+    public init(x: Double, y: Double) { self.x = x; self.y = y }
+}
+
+public struct Size: Equatable, Sendable {
+    public var width, height: Double
+    public init(width: Double, height: Double) { self.width = width; self.height = height }
 }
 
 public enum DockEdge: String, Equatable, Sendable { case bottom, left, right }

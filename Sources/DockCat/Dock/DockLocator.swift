@@ -5,6 +5,9 @@ struct DockPlacement {
     let sleepingPoint: CGPoint
     let presentationPoint: CGPoint
     let edge: DockEdge
+    let screenFrame: CGRect
+    let visibleScreenFrame: CGRect
+    let displayIdentifier: String
     let usedDisplayFallback: Bool
 }
 
@@ -29,6 +32,7 @@ final class DockLocator {
         // valid placement and visible overlay frames until a later refresh resolves one.
         guard let screen else { return nil }
         let frame = screen.frame, visible = screen.visibleFrame
+        let displayIdentifier = Self.identifier(for: screen)
         let inferred = DockGeometryInference.infer(frame: .init(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height), visible: .init(x: visible.minX, y: visible.minY, width: visible.width, height: visible.height))
         let inset = CGFloat(inferred.thickness) + preferences.positionOffset
         let start = preferences.sleepingCorner == .start
@@ -42,14 +46,17 @@ final class DockLocator {
                 sleepingPoint: CGPoint(x: frame.midX + (start ? -halfEstimatedDockWidth : halfEstimatedDockWidth) + preferences.dockEndOffset, y: frame.minY + inset),
                 presentationPoint: CGPoint(x: frame.midX, y: frame.minY + inset),
                 edge: .bottom,
+                screenFrame: frame,
+                visibleScreenFrame: visible,
+                displayIdentifier: displayIdentifier,
                 usedDisplayFallback: usedDisplayFallback
             )
         case .left:
             let halfEstimatedDockHeight = min(frame.height * 0.31, max(240, CGFloat(inferred.thickness) * 4.8))
-            return .init(sleepingPoint: CGPoint(x: frame.minX + inset, y: frame.midY + (start ? halfEstimatedDockHeight : -halfEstimatedDockHeight) + preferences.dockEndOffset), presentationPoint: CGPoint(x: frame.minX + inset, y: frame.midY), edge: .left, usedDisplayFallback: usedDisplayFallback)
+            return .init(sleepingPoint: CGPoint(x: frame.minX + inset, y: frame.midY + (start ? halfEstimatedDockHeight : -halfEstimatedDockHeight) + preferences.dockEndOffset), presentationPoint: CGPoint(x: frame.minX + inset, y: frame.midY), edge: .left, screenFrame: frame, visibleScreenFrame: visible, displayIdentifier: displayIdentifier, usedDisplayFallback: usedDisplayFallback)
         case .right:
             let halfEstimatedDockHeight = min(frame.height * 0.31, max(240, CGFloat(inferred.thickness) * 4.8))
-            return .init(sleepingPoint: CGPoint(x: frame.maxX - inset, y: frame.midY + (start ? halfEstimatedDockHeight : -halfEstimatedDockHeight) + preferences.dockEndOffset), presentationPoint: CGPoint(x: frame.maxX - inset, y: frame.midY), edge: .right, usedDisplayFallback: usedDisplayFallback)
+            return .init(sleepingPoint: CGPoint(x: frame.maxX - inset, y: frame.midY + (start ? halfEstimatedDockHeight : -halfEstimatedDockHeight) + preferences.dockEndOffset), presentationPoint: CGPoint(x: frame.maxX - inset, y: frame.midY), edge: .right, screenFrame: frame, visibleScreenFrame: visible, displayIdentifier: displayIdentifier, usedDisplayFallback: usedDisplayFallback)
         }
     }
     static func identifier(for screen: NSScreen) -> String {

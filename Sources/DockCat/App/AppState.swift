@@ -1001,13 +1001,21 @@ final class AppState: ObservableObject {
         let catOutcome = catWindow.updatePlacement(
             geometry, logicalState: logicalPlacement, sessionID: sessionID
         )
-        // Cat placement is applied first so a dismiss animation rebases toward the
-        // handoff rect derived from the same new presentation transaction.
-        let cardOutcome = cardWindow.updatePlacement(
-            above: geometry.presentationPoint,
-            offset: settings.preferences.cardOffset,
+        // Card exclusion protects the new destination even when outbound travel preserves
+        // the panel's old origin. Dismissal rebasing separately follows the live cat rect.
+        let destinationExclusionFrame = catWindow.presentationExclusionFrame()
+        let liveHandoffRect = catWindow.handoffSourceRect()
+        let cardOutcome = cardWindow.updatePlacementContext(
+            CardPlacementContext(
+                presentationAnchor: geometry.presentationPoint,
+                dockEdge: geometry.edge,
+                visibleScreenFrame: geometry.visibleScreenFrame,
+                catExclusionFrame: destinationExclusionFrame,
+                offset: settings.preferences.cardOffset,
+                placementRevision: placementRevision
+            ),
             logicalState: logicalPlacement,
-            dismissalSourceRect: catWindow.handoffSourceRect()
+            dismissalSourceRect: liveHandoffRect
         )
         if isFirstValidPlacement {
             // Startup with no screen leaves the overlay unordered. Delivery is gated on

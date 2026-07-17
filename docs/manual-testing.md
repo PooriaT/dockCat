@@ -77,6 +77,29 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
   Confirm overlays never move to zero; the last valid geometry remains until a valid fallback
   or returning screen is resolved.
 
+## Dock-edge-aware notification card placement
+
+- Put the Dock on the bottom, left, and right edges of the main display. Confirm the card is,
+  respectively, above, right of, and left of the cat with a consistent Card offset gap.
+- Select a secondary display to the left of or above the main display. Confirm negative global
+  x or y coordinates are preserved and the card stays on the selected display.
+- Move the cat presentation location near all four visible-frame corners. Confirm the entire
+  card remains inside the work area with a small margin and does not cover the handoff anchor
+  when a collision-free position exists.
+- Present short and long title/message combinations, cards with an Open action, and persistent
+  cards with the close control. Confirm the panel height follows the content without flashing.
+- Replace a short visible card with a taller card and then reverse the order. Confirm origin and
+  size animate together, remain on-screen, and the active notification session is unchanged.
+- While a card is visible, change Position settings, display resolution, accessibility text
+  size, and action-button visibility. Confirm the card remeasures and follows the newest
+  placement without invoking dismissal.
+- Enable Dock auto-hide and repeat each Dock edge. Confirm fallback geometry remains within the
+  selected screen's visible frame.
+- On an unusually small or scaled display, confirm an oversized card is constrained to the
+  margin-adjusted visible frame and placement diagnostics report a typed degraded result.
+- Inspect card-placement logs. They may contain only Dock edge, card dimensions, clamp and
+  collision flags, placement revision, and degradation—never notification text or screen name.
+
 ## Effect-driven transitions and recovery
 
 - Send an internal transient notification and confirm the complete wake, pickup, travel, presentation, timeout, card dismissal, return, settle, and sleep flow.

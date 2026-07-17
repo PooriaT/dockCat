@@ -44,14 +44,42 @@ final class PlacementRefreshControllerTests: XCTestCase {
         XCTAssertTrue(home.motionWasRetargeted)
     }
 
+    func testOutboundDockEdgeChangeUsesDestinationExclusionAndLiveHandoffSeparately() {
+        let controller = CatWindowController()
+        let initial = makePlacement(
+            sleeping: CGPoint(x: 240, y: 180),
+            presentation: CGPoint(x: 500, y: 180)
+        )
+        _ = controller.updatePlacement(initial, logicalState: .home, sessionID: nil)
+        let sessionID = PresentationSessionID(generation: 1, notificationID: UUID())
+        let changed = makePlacement(
+            sleeping: CGPoint(x: 320, y: 240),
+            presentation: CGPoint(x: 710, y: 240),
+            edge: .left
+        )
+
+        _ = controller.updatePlacement(
+            changed, logicalState: .travellingToPresentation, sessionID: sessionID
+        )
+
+        XCTAssertEqual(
+            controller.presentationExclusionFrame(),
+            CGRect(x: 734, y: 266, width: 36, height: 24)
+        )
+        XCTAssertEqual(
+            controller.handoffSourceRect(),
+            CGRect(x: 264, y: 206, width: 36, height: 24)
+        )
+    }
+
     func testActiveCardPlacementRebasePreservesOperationAndDoesNotDismiss() async {
         let controller = CardWindowController()
         let notification = DockCatNotification(sourceName: "test", title: "", message: "")
         let sessionID = PresentationSessionID(generation: 1, notificationID: notification.id)
         var dismissCount = 0
         controller.onDismiss = { dismissCount += 1 }
-        _ = controller.updatePlacement(
-            above: CGPoint(x: 400, y: 160), offset: 20,
+        _ = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 400, y: 160), offset: 20, revision: 1),
             logicalState: .presentation, dismissalSourceRect: nil
         )
         let task = Task {
@@ -62,8 +90,8 @@ final class PlacementRefreshControllerTests: XCTestCase {
         }
         await Task.yield()
 
-        let outcome = controller.updatePlacement(
-            above: CGPoint(x: 640, y: 260), offset: 30,
+        let outcome = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 640, y: 260), offset: 30, revision: 2),
             logicalState: .presentation, dismissalSourceRect: nil
         )
 
@@ -80,8 +108,8 @@ final class PlacementRefreshControllerTests: XCTestCase {
         let sessionID = PresentationSessionID(generation: 1, notificationID: notification.id)
         var dismissCount = 0
         controller.onDismiss = { dismissCount += 1 }
-        _ = controller.updatePlacement(
-            above: CGPoint(x: 400, y: 160), offset: 20,
+        _ = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 400, y: 160), offset: 20, revision: 1),
             logicalState: .presentation, dismissalSourceRect: nil
         )
         let presentationResult = await controller.present(
@@ -97,8 +125,8 @@ final class PlacementRefreshControllerTests: XCTestCase {
         }
         await Task.yield()
 
-        let outcome = controller.updatePlacement(
-            above: CGPoint(x: 700, y: 240), offset: 20,
+        let outcome = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 700, y: 240), offset: 20, revision: 2),
             logicalState: .presentation,
             dismissalSourceRect: CGRect(x: 680, y: 230, width: 20, height: 20)
         )
@@ -107,6 +135,160 @@ final class PlacementRefreshControllerTests: XCTestCase {
         let dismissalResult = await dismissal.value
         XCTAssertEqual(dismissalResult, .completed)
         XCTAssertEqual(dismissCount, 0)
+    }
+
+    func testHiddenCardStoresContextWithoutShowing() {
+        let controller = CardWindowController()
+        let context = makeCardContext(
+            anchor: CGPoint(x: -500, y: 120), revision: 7,
+            visibleFrame: CGRect(x: -1_200, y: -200, width: 1_200, height: 900)
+        )
+
+        _ = controller.updatePlacementContext(
+            context, logicalState: .home, dismissalSourceRect: nil
+        )
+
+        XCTAssertEqual(controller.placementRevisionForTesting, 7)
+        XCTAssertFalse(controller.panelIsVisibleForTesting)
+    }
+
+    func testPresentUsesMeasuredContentSizeAndSelectedScreenCoordinates() async {
+        let controller = CardWindowController()
+        let notification = DockCatNotification(
+            sourceName: "test", title: "Measured", message: "Short"
+        )
+        let sessionID = PresentationSessionID(
+            generation: 1, notificationID: notification.id
+        )
+        _ = controller.updatePlacementContext(
+            makeCardContext(
+                anchor: CGPoint(x: -600, y: 80), revision: 1,
+                visibleFrame: CGRect(x: -1_200, y: -100, width: 1_200, height: 800)
+            ),
+            logicalState: .presentation,
+            dismissalSourceRect: nil
+        )
+
+        let result = await controller.present(
+            notification: notification, preferences: DockCatPreferences(),
+            from: CGRect(x: -620, y: 60, width: 36, height: 24),
+            reducedMotion: true, sessionID: sessionID
+        )
+
+        XCTAssertEqual(result, .completed)
+        XCTAssertEqual(controller.panelFrameForTesting.size, controller.measuredCardSizeForTesting)
+        XCTAssertLessThan(controller.panelFrameForTesting.minX, 0)
+        XCTAssertGreaterThanOrEqual(controller.panelFrameForTesting.minX, -1_190)
+        controller.forceHide()
+    }
+
+    func testReplacementRemeasuresAndChangesFrameHeight() async {
+        let controller = CardWindowController()
+        let short = DockCatNotification(
+            sourceName: "test", title: "Short", message: "Brief"
+        )
+        let tall = DockCatNotification(
+            sourceName: "test",
+            title: "A deliberately long title that wraps onto its second available line",
+            message: "A long message that fills the available card width and uses several lines so fitting size reflects the replacement content instead of the panel's initial frame.",
+            presentation: .persistent,
+            actionURL: URL(string: "https://example.com")
+        )
+        let sessionID = PresentationSessionID(generation: 1, notificationID: short.id)
+        _ = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 600, y: 100), revision: 1),
+            logicalState: .presentation,
+            dismissalSourceRect: nil
+        )
+        _ = await controller.present(
+            notification: short, preferences: DockCatPreferences(), from: .zero,
+            reducedMotion: true, sessionID: sessionID
+        )
+        let shortHeight = controller.panelFrameForTesting.height
+
+        let result = await controller.replace(
+            notification: tall, preferences: DockCatPreferences(),
+            reducedMotion: true, sessionID: sessionID
+        )
+
+        XCTAssertEqual(result, .completed)
+        XCTAssertGreaterThan(controller.panelFrameForTesting.height, shortHeight)
+        XCTAssertEqual(controller.panelFrameForTesting.size, controller.measuredCardSizeForTesting)
+        controller.forceHide()
+    }
+
+    func testStableVisibleCardFollowsNewestPlacementAndRejectsStaleRevision() async {
+        let controller = CardWindowController()
+        let notification = DockCatNotification(
+            sourceName: "test", title: "Stable", message: "Card"
+        )
+        let sessionID = PresentationSessionID(
+            generation: 1, notificationID: notification.id
+        )
+        var dismissCount = 0
+        controller.onDismiss = { dismissCount += 1 }
+        _ = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 500, y: 100), revision: 1),
+            logicalState: .presentation,
+            dismissalSourceRect: nil
+        )
+        _ = await controller.present(
+            notification: notification, preferences: DockCatPreferences(), from: .zero,
+            reducedMotion: true, sessionID: sessionID
+        )
+        let newest = makeCardContext(
+            anchor: CGPoint(x: -500, y: 180), edge: .left, revision: 3,
+            visibleFrame: CGRect(x: -1_200, y: -100, width: 1_200, height: 800)
+        )
+        _ = controller.updatePlacementContext(
+            newest, logicalState: .presentation, dismissalSourceRect: nil
+        )
+        let newestFrame = controller.panelFrameForTesting
+
+        _ = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 900, y: 100), revision: 2),
+            logicalState: .presentation,
+            dismissalSourceRect: nil
+        )
+
+        XCTAssertEqual(controller.placementRevisionForTesting, 3)
+        XCTAssertEqual(controller.panelFrameForTesting, newestFrame)
+        XCTAssertLessThan(newestFrame.minX, 0)
+        XCTAssertEqual(dismissCount, 0)
+        controller.forceHide()
+    }
+
+    func testCancelledPresentationRestoresLatestValidPlannedFrame() async {
+        let controller = CardWindowController()
+        let notification = DockCatNotification(
+            sourceName: "test", title: "Cancellation", message: "Card"
+        )
+        let sessionID = PresentationSessionID(
+            generation: 1, notificationID: notification.id
+        )
+        _ = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 400, y: 100), revision: 1),
+            logicalState: .presentation,
+            dismissalSourceRect: nil
+        )
+        let task = Task {
+            await controller.present(
+                notification: notification, preferences: DockCatPreferences(),
+                from: .zero, reducedMotion: false, sessionID: sessionID
+            )
+        }
+        await Task.yield()
+        _ = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 800, y: 180), revision: 2),
+            logicalState: .presentation,
+            dismissalSourceRect: nil
+        )
+        let expected = controller.stableCardFrameForTesting
+        task.cancel()
+        let result = await task.value
+
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertEqual(controller.panelFrameForTesting, expected)
     }
 
     private func makePlacement(
@@ -118,7 +300,29 @@ final class PlacementRefreshControllerTests: XCTestCase {
             sleepingPoint: sleeping,
             presentationPoint: presentation,
             edge: edge,
+            screenFrame: CGRect(x: 0, y: 0, width: 1_440, height: 900),
+            visibleScreenFrame: CGRect(x: 0, y: 24, width: 1_440, height: 876),
+            displayIdentifier: "test-display",
             usedDisplayFallback: false
+        )
+    }
+
+    private func makeCardContext(
+        anchor: CGPoint,
+        edge: DockEdge = .bottom,
+        offset: Double = 14,
+        revision: UInt64,
+        visibleFrame: CGRect = CGRect(x: 0, y: 24, width: 1_440, height: 876)
+    ) -> CardPlacementContext {
+        CardPlacementContext(
+            presentationAnchor: anchor,
+            dockEdge: edge,
+            visibleScreenFrame: visibleFrame,
+            catExclusionFrame: CGRect(
+                x: anchor.x + 24, y: anchor.y + 26, width: 36, height: 24
+            ),
+            offset: offset,
+            placementRevision: revision
         )
     }
 }
