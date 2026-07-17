@@ -39,6 +39,18 @@ The ordering invariants remain:
 - External updates replace the active card; source disappearance enters ordered dismissal.
 - `cardDismissed` is required before return-home motion.
 
+`selectNextQueueAction` consumes one atomic queue decision. With stay-in-place enabled,
+completion and promotion occur together and emit `nextNotificationAvailable`; otherwise the
+completed item is cleared while pending FIFO order is preserved and `queueEmpty` drives the
+existing dismiss-and-return choreography. When a source has already atomically removed the
+active item, the effect performs one `claimNext()` decision instead of attempting a second
+completion. The removed payload is retained only by the coordinator long enough to dismiss the
+visible DockCat card in order.
+
+Pause and resume events are submitted only after the queue actor confirms its pause outcome.
+Rapid requests are coalesced by one main-actor task, so queue state, published `isPaused`, the
+remembered pre-pause machine state, timers, and visuals observe the same serialized order.
+
 ## Coordinator sequencing and rejection
 
 `AppState.apply(_:)` is the sole production state-machine entry point. It publishes and
@@ -64,5 +76,5 @@ An impossible production sequence or missing prerequisite triggers recovery once
 
 Recovery does not retry the inconsistent effect and never acts on native system UI.
 
-Queue atomic-operation redesign remains deferred to issue #74. Presentation ownership,
-session identifiers, injectable timing, and timer clocks remain deferred to issue #75.
+Presentation ownership, session identifiers, injectable timing, pause-duration preservation,
+and timer clocks remain deferred to issue #75.
