@@ -136,6 +136,8 @@ final class AppState: ObservableObject {
         }
         claimTask?.cancel()
         claimTask = nil
+        pauseTransitionTask?.cancel()
+        requestedPauseState = false
         presentation.cancelSession(reason: .globalDisable)
         cardWindow.forceHide()
         catWindow.resetToSleeping()
@@ -152,6 +154,16 @@ final class AppState: ObservableObject {
             }
             _ = observeQueueRevision(completion.revision)
             projectNoCurrent(revision: completion.revision)
+            let pause = await queue.setPaused(false)
+            guard !Task.isCancelled else {
+                disableCleanupTask = nil
+                return
+            }
+            _ = observeQueueRevision(pause.revision)
+            requestedPauseState = false
+            isPaused = false
+            isPauseTransitioning = false
+            pauseTransitionTask = nil
             let recovery = machine.recoverToSleeping()
             catState = recovery.safeState
             disableCleanupTask = nil
@@ -380,6 +392,7 @@ final class AppState: ObservableObject {
     func refreshPlacement() { reposition() }
 
     func setPaused(_ paused: Bool) {
+        guard settings.preferences.enabled, disableCleanupTask == nil else { return }
         requestedPauseState = paused
         if pauseTransitionTask == nil, paused == isPaused { return }
         guard pauseTransitionTask == nil else { return }
@@ -443,17 +456,32 @@ final class AppState: ObservableObject {
         claimTask = Task { [weak self] in
             guard let self else { return }
             let decision = await queue.claimNext()
-            guard !Task.isCancelled, applyClaim(decision) else { claimTask = nil; return }
-            guard await reconcileQueueProjection(context: "claim") else { claimTask = nil; return }
+            guard !Task.isCancelled else { claimTask = nil; return }
+            let shouldStart = await applyClaim(decision)
             claimTask = nil
+            guard shouldStart else {
+                // A stale idle result can be superseded by a pending enqueue while this
+                // task owns the claim slot. Retry after releasing the slot so it is not
+                // left stranded.
+                beginFlowIfNeeded()
+                return
+            }
+            guard await reconcileQueueProjection(context: "claim") else { return }
             startFlow(with: .notificationAvailable)
         }
     }
 
-    private func applyClaim(_ decision: DockCatCore.NotificationQueue.ClaimResult) -> Bool {
-        guard observeQueueRevision(decision.revision) else {
-            failQueueReconciliation(context: "stale claim decision")
-            return false
+    private func applyClaim(_ decision: DockCatCore.NotificationQueue.ClaimResult) async -> Bool {
+        if !observeQueueRevision(decision.revision) {
+            let snapshot = await queue.snapshot()
+            guard !Task.isCancelled else { return false }
+            _ = observeQueueRevision(snapshot.revision)
+            switch decision {
+            case .promoted(let notification, _), .current(let notification, _):
+                guard snapshot.currentID == notification.id else { return false }
+            case .paused, .idle:
+                return false
+            }
         }
         switch decision {
         case .promoted(let notification, let revision), .current(let notification, let revision):

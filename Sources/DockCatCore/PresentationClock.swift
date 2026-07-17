@@ -37,8 +37,14 @@ public actor ManualPresentationClock: PresentationClock {
         let continuation: CheckedContinuation<Void, Never>
     }
 
+    private struct WaiterCountObservation {
+        let expectedCount: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private var instant: PresentationInstant
     private var waiters: [UUID: Waiter] = [:]
+    private var waiterCountObservations: [UUID: WaiterCountObservation] = [:]
 
     public init(now: PresentationInstant = .zero) { instant = now }
 
@@ -53,6 +59,7 @@ public actor ManualPresentationClock: PresentationClock {
                     continuation.resume()
                 } else {
                     waiters[id] = Waiter(deadline: deadline, continuation: continuation)
+                    resumeSatisfiedWaiterCountObservations()
                 }
             }
         } onCancel: {
@@ -74,11 +81,37 @@ public actor ManualPresentationClock: PresentationClock {
             waiters.removeValue(forKey: id)
             waiter.continuation.resume()
         }
+        resumeSatisfiedWaiterCountObservations()
     }
 
     public var pendingWaiterCount: Int { waiters.count }
 
+    /// Suspends until the manual clock has exactly `expectedCount` registered sleeps.
+    /// Tests can use this as an actor-ordered rendezvous instead of polling the scheduler.
+    public func waitUntilPendingWaiterCount(_ expectedCount: Int) async {
+        precondition(expectedCount >= 0)
+        guard waiters.count != expectedCount else { return }
+        let id = UUID()
+        await withCheckedContinuation { continuation in
+            waiterCountObservations[id] = .init(
+                expectedCount: expectedCount,
+                continuation: continuation
+            )
+        }
+    }
+
     private func cancelWaiter(_ id: UUID) {
         waiters.removeValue(forKey: id)?.continuation.resume()
+        resumeSatisfiedWaiterCountObservations()
+    }
+
+    private func resumeSatisfiedWaiterCountObservations() {
+        let satisfied = waiterCountObservations.filter {
+            $0.value.expectedCount == waiters.count
+        }
+        for (id, observation) in satisfied {
+            waiterCountObservations.removeValue(forKey: id)
+            observation.continuation.resume()
+        }
     }
 }

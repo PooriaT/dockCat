@@ -208,11 +208,7 @@ final class PresentationSessionTests: XCTestCase {
 }
 
 private func waitForWaiters(_ count: Int, on clock: ManualPresentationClock) async {
-    for _ in 0..<100 {
-        if await clock.pendingWaiterCount == count { return }
-        await Task.yield()
-    }
-    XCTFail("Manual clock did not reach \(count) waiters")
+    await clock.waitUntilPendingWaiterCount(count)
 }
 
 @MainActor
