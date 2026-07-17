@@ -9,7 +9,10 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $tab) {
             Form {
-                Toggle("Enable DockCat", isOn: binding(\.enabled))
+                Toggle("Enable DockCat", isOn: Binding(
+                    get: { state.settings.preferences.enabled },
+                    set: { state.setDockCatEnabled($0) }
+                ))
                 Toggle("Pause DockCat", isOn: Binding(get: { state.isPaused }, set: { state.setPaused($0) }))
                     .disabled(state.isPauseTransitioning)
                 Toggle("Show menu-bar icon", isOn: $menuBarVisible)
@@ -158,6 +161,8 @@ private struct SystemNotificationsSettingsView: View {
         case .observerNotImplemented: "Permission is available, but notification observation is deferred to issue #68."
         case .compatibilityProblem: "The source reported a compatibility problem and may be retried."
         case .startupFailed: "The source could not start and may be retried."
+        case .processUnavailable: "Notification Center is not currently available and will be retried."
+        case .noUsefulNotifications: "No compatible notification events were available."
         case nil: access.health.state == .disabled ? "This setting is independent from Enable DockCat." : "Source lifecycle status."
         }
     }

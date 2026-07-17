@@ -62,7 +62,7 @@ import XCTest
         XCTAssertEqual(snapshots, 2)
     }
     private func make(_ trust: SourceTrustFake, _ resolver: ResolverFake, _ api: SourceAXFake,
-                      outcome: @escaping (SystemNotificationAccessibilitySource.Outcome) -> Void) -> SystemNotificationAccessibilitySource {
+                      outcome: @escaping @MainActor @Sendable (SystemNotificationAccessibilitySource.Outcome) -> Void) -> SystemNotificationAccessibilitySource {
         .init(trust: trust, resolver: resolver, client: api, eventHandler: { _ in }, outcomeHandler: outcome)
     }
 }
@@ -72,10 +72,11 @@ import XCTest
     func isTrusted() -> Bool { trusted }; func requestTrust() -> Bool { trusted }
 }
 @MainActor private final class ResolverFake: NotificationCenterProcessResolving {
-    var resolution: NotificationCenterResolution; var changed: (() -> Void)?
+    var resolution: NotificationCenterResolution
+    var changed: (@MainActor @Sendable () -> Void)?
     init(_ resolution: NotificationCenterResolution) { self.resolution = resolution }
     func resolve() -> NotificationCenterResolution { resolution }
-    func startMonitoring(_ changed: @escaping () -> Void) { self.changed = changed }
+    func startMonitoring(_ changed: @escaping @MainActor @Sendable () -> Void) { self.changed = changed }
     func stopMonitoring() { changed = nil }
 }
 @MainActor private final class SourceElement: AccessibilityElementReference { let traversalIdentifier: Int; init(_ id: Int) { traversalIdentifier = id } }

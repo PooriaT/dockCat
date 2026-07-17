@@ -50,6 +50,9 @@ visible DockCat card in order.
 Pause and resume events are submitted only after the queue actor confirms its pause outcome.
 Rapid requests are coalesced by one main-actor task, so queue state, published `isPaused`, the
 remembered pre-pause machine state, timers, and visuals observe the same serialized order.
+The active presentation session records the phase independently of the state-machine enum so
+a cancelled card operation resumes the matching initial-presentation, replacement, or dismissal
+effect. A newer session cannot inherit this phase or deferred external lifecycle work.
 
 ## Coordinator sequencing and rejection
 
@@ -67,14 +70,14 @@ corruption and does not itself trigger recovery.
 
 An impossible production sequence or missing prerequisite triggers recovery once:
 
-1. Cancel the flow and transient timer.
+1. Cancel the presentation session, which cancels choreography and timeout children.
 2. Cancel card presentation and cat motion/animation work.
 3. Hide expanded and carried cards and restore the cat at its sleeping anchor.
-4. Clear interrupted-flow and deferred external-lifecycle markers.
+4. Clear session-scoped deferred external-lifecycle markers.
 5. Drop the inconsistent active DockCat queue item, preserving pending items.
 6. Reset the state machine to `sleeping`, unpause the queue, and attempt the next pending item.
 
 Recovery does not retry the inconsistent effect and never acts on native system UI.
 
-Presentation ownership, session identifiers, injectable timing, pause-duration preservation,
-and timer clocks remain deferred to issue #75.
+External disappearance takes precedence over a deferred update. The winning lifecycle or
+dismissal callback must still validate the current session token before applying its effect.
