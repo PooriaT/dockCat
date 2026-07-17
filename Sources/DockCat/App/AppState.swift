@@ -1003,11 +1003,18 @@ final class AppState: ObservableObject {
         )
         // Cat placement is applied first so a dismiss animation rebases toward the
         // handoff rect derived from the same new presentation transaction.
-        let cardOutcome = cardWindow.updatePlacement(
-            above: geometry.presentationPoint,
-            offset: settings.preferences.cardOffset,
+        let handoffRect = catWindow.handoffSourceRect()
+        let cardOutcome = cardWindow.updatePlacementContext(
+            CardPlacementContext(
+                presentationAnchor: geometry.presentationPoint,
+                dockEdge: geometry.edge,
+                visibleScreenFrame: geometry.visibleScreenFrame,
+                catExclusionFrame: handoffRect,
+                offset: settings.preferences.cardOffset,
+                placementRevision: placementRevision
+            ),
             logicalState: logicalPlacement,
-            dismissalSourceRect: catWindow.handoffSourceRect()
+            dismissalSourceRect: handoffRect
         )
         if isFirstValidPlacement {
             // Startup with no screen leaves the overlay unordered. Delivery is gated on

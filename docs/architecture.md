@@ -41,7 +41,7 @@ storage, while a FIFO cache retains only the 256 most recently completed UUIDs. 
 retained completed UUIDs are rejected. The oldest completed UUID becomes eligible when the
 cache evicts it. External removal releases its active UUID immediately and retains no content.
 
-Remaining limitations: the handoff anchor is a stable overlay-frame contract rather than direct SpriteKit node projection, and the notification card size remains fixed for this issue.
+Remaining limitation: the handoff anchor is a stable overlay-frame contract rather than direct SpriteKit node projection.
 
 ## Presentation sessions and clocks
 
@@ -91,8 +91,40 @@ to an available screen is recorded without logging screen descriptions.
 
 Geometry refresh has its own privacy-safe revision and does not submit a state-machine
 event, claim/complete a queue item, change the projected notification, create a presentation
-session, or restart transient timing. Dock-edge-aware/clamped card geometry remains issue
-#78; stable display identity, selection policy, calibration, and previews remain issue #79.
+session, or restart transient timing. Card placement consumes the same revision and selected
+screen geometry; stable display identity, selection policy, calibration, and previews remain
+issue #79.
+
+## Notification card placement
+
+`CardPlacementPlanner` is a Foundation-only geometry boundary. Its input contains the
+presentation anchor, Dock edge, measured card size, selected screen's global visible frame,
+optional cat exclusion frame, user offset, and named screen margin. It returns the exact
+frame, preferred direction, clamp and collision-fallback flags, and a typed degradation.
+AppKit screen selection is not repeated in the card controller.
+
+- A bottom Dock prefers the card above the cat and centers it horizontally on the anchor.
+  A left Dock prefers the card to the cat's right and centers it vertically. A right Dock
+  prefers the card to the cat's left and centers it vertically. `cardOffset` always means
+  extra distance away from the protected cat/anchor region.
+- The full card frame is clamped to the selected screen's `visibleFrame`, inset by a 10-point
+  margin in global coordinates. Negative x and y origins are preserved. If the card is too
+  large, its panel is deterministically constrained to that margin-adjusted available frame.
+- The planner protects the handoff rect and presentation anchor with an 8-point minimum gap.
+  If clamping creates an intersection, it tries two bounded Dock-axis adjustments, then an
+  on-screen opposite-side candidate and screen corners. Preferred-side candidates always
+  win. If no collision-free candidate exists, the clamped frame is returned with an
+  `unavoidableCollision` degradation.
+- `NotificationCardView` keeps its intended 340-point width when the selected screen permits.
+  The hosting view is installed and laid out first; its fitting height is then clamped to the
+  120–480 point usability range and installed as the panel content size before placement is
+  planned. Replacement content and intrinsic-size invalidations remeasure and re-plan.
+- Placement contexts carry the app's monotonic placement revision. Active presentation,
+  replacement, and dismissal transactions rebase against newer revisions before accepting
+  completion. Hidden panels only store context, and geometry updates never call `onDismiss`.
+
+Stable display identity, automatic-display selection refinements, Dock calibration, and
+placement previews remain deferred to issue #79.
 # External lifecycle reconciliation
 
 `ExternalNotificationLifecycleTracker` serializes bounded visible-item state and emits typed lifecycle events. `ExternalPresentationPolicy` deterministically maps structural evidence to best-effort presentation behavior. `NotificationQueue` remains the atomic owner of pending/current items and supports identity-based update, removal, and location while preserving DockCat UUIDs and pending FIFO order.
