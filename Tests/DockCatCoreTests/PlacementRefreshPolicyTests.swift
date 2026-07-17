@@ -42,6 +42,16 @@ final class PlacementRefreshPolicyTests: XCTestCase {
         XCTAssertEqual(PlacementRefreshPolicy.action(for: .hiddenOrRecovering), .preserveRecoveryVisuals)
     }
 
+    func testSpecificDisplayRestorationRequiresActualSleepingState() {
+        for state in CatState.allCases {
+            XCTAssertEqual(
+                PlacementRefreshPolicy.canRestoreSpecificDisplay(catState: state),
+                state == .sleeping,
+                "Unexpected restoration boundary for \(state)"
+            )
+        }
+    }
+
     func testMissingScreenRetainsLastValidPlacement() {
         XCTAssertEqual(
             PlacementRefreshPolicy.availabilityAction(

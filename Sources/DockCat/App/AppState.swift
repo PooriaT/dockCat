@@ -1009,7 +1009,9 @@ final class AppState: ObservableObject {
         guard let geometry = locator.locate(
             preferences: settings.preferences,
             catalog: displayCatalog,
-            safeToRestoreSpecific: logicalPlacement == .home
+            safeToRestoreSpecific: PlacementRefreshPolicy.canRestoreSpecificDisplay(
+                catState: machine.state
+            )
         ) else {
             stopCalibrationPreview()
             let availability = PlacementRefreshPolicy.availabilityAction(

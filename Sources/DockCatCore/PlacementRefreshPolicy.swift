@@ -11,6 +11,12 @@ public enum PlacementRefreshAction: Equatable, Sendable {
 }
 
 public enum PlacementRefreshPolicy {
+    /// Reconnecting a specifically selected display may move every overlay to another
+    /// screen, so only the state machine's fully sleeping state is a safe boundary.
+    public static func canRestoreSpecificDisplay(catState: CatState) -> Bool {
+        catState == .sleeping
+    }
+
     public static func action(for placement: CatLogicalPlacement) -> PlacementRefreshAction {
         switch placement {
         case .home: .moveToHome

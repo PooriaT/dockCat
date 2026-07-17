@@ -75,10 +75,15 @@ final class DisplayCatalog: ObservableObject {
         safeToRestoreSpecific: Bool
     ) -> DisplayResolutionResult {
         let wasExplicitSelectionChange = previousSelection != nil && previousSelection != selection
+        let retainedIdentity = Self.retainedIdentityForResolution(
+            selection: selection,
+            previousSelection: previousSelection,
+            retainedRuntimeIdentity: retainedRuntimeIdentity
+        )
         let result = DisplaySelectionResolver.resolve(
             descriptors: descriptors,
             selection: selection,
-            retainedRuntimeIdentity: retainedRuntimeIdentity,
+            retainedRuntimeIdentity: retainedIdentity,
             safeToRestoreSpecific: safeToRestoreSpecific || wasExplicitSelectionChange
         )
         previousSelection = selection
@@ -89,6 +94,21 @@ final class DisplayCatalog: ObservableObject {
             )
         }
         return result
+    }
+
+    /// Automatic mode has its own session retention. A display retained by Main or
+    /// Specific mode must not become Automatic's initial selection.
+    static func retainedIdentityForResolution(
+        selection: DisplaySelection,
+        previousSelection: DisplaySelection?,
+        retainedRuntimeIdentity: DisplayIdentity?
+    ) -> DisplayIdentity? {
+        guard selection == .automatic,
+              let previousSelection,
+              previousSelection != .automatic else {
+            return retainedRuntimeIdentity
+        }
+        return nil
     }
 
     static func displayID(_ screen: NSScreen) -> CGDirectDisplayID? {
