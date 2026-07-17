@@ -95,6 +95,34 @@ final class PresentationAnimationCancellationTests: XCTestCase {
         XCTAssertEqual(result, .cancelled)
         XCTAssertNotEqual(panel.frameOrigin, destination)
     }
+
+    func testReplacementMotionRejectsOldFinalSnap() async {
+        let panel = MotionPanelFake(origin: .zero)
+        let driver = CatMotionDriver(updater: panel)
+        let presentationID = PresentationSessionID(generation: 1, notificationID: UUID())
+        let oldDestination = CGPoint(x: 10_000, y: 0)
+        let old = Task {
+            await driver.move(
+                to: oldDestination, dockEdge: .bottom, speed: 0.25,
+                reducedMotion: false, presentationSessionID: presentationID
+            )
+        }
+        await Task.yield()
+        let newDestination = CGPoint(x: 120, y: 0)
+        let replacement = Task {
+            await driver.move(
+                to: newDestination, dockEdge: .bottom, speed: 4,
+                reducedMotion: false, presentationSessionID: presentationID
+            )
+        }
+
+        let oldResult = await old.value
+        let replacementResult = await replacement.value
+        XCTAssertEqual(oldResult, .cancelled)
+        XCTAssertEqual(replacementResult, .completed)
+        XCTAssertEqual(panel.frameOrigin, newDestination)
+        XCTAssertNotEqual(panel.frameOrigin, oldDestination)
+    }
 }
 
 @MainActor

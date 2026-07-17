@@ -51,6 +51,85 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 - Update an external notification during card expansion and replacement, then remove it during wake, travel, expansion, replacement, and dismissal. Confirm disappearance wins and no old content returns.
 - Disable DockCat, revoke Accessibility permission, and quit during wake, travel, presentation, and dismissal. After each case, send a new test notification and confirm there is no stuck cat, stale panel, old-destination snap, or delayed dismissal.
 
+## Placement refresh during choreography
+
+- While the cat sleeps, drag each Position slider. Confirm the sleeping cat follows the
+  newest anchor without task buildup.
+- Change Position while wake and pickup animations run. Confirm the cat moves home while
+  the current pose continues and the notification is not restarted.
+- During outbound travel, move the Dock to another edge and attach or detach a display.
+  Confirm the cat continues from its current origin toward the newest presentation anchor,
+  with no snap to home or either old anchor.
+- Pause during outbound and return travel, change geometry, then resume. Confirm the cat
+  continues toward the new target and the same notification remains active.
+- With stable transient and persistent cards visible, change offsets and display resolution.
+  Confirm cat and card remain together and the transient remaining duration is unchanged.
+- Change geometry during initial card presentation, queued replacement, and card dismissal.
+  Confirm the visual operation rebases, content does not revert, and no placement refresh
+  is treated as a user close.
+- Change the Dock edge during return travel and settlement. Confirm return retargets from
+  the current origin and settlement completes at the new sleeping anchor without showing a
+  card.
+- Repeatedly drag a Position slider and inspect privacy-safe placement logs. They may contain
+  only revision, logical placement, old/new Dock edge, retarget/rebase flags, and fallback or
+  last-valid use. Confirm a later notification still completes normally.
+- Where practical, detach the selected display and briefly exercise a no-screen transition.
+  Confirm overlays never move to zero; the last valid geometry remains until a valid fallback
+  or returning screen is resolved.
+
+## Dock-edge-aware notification card placement
+
+- Put the Dock on the bottom, left, and right edges of the main display. Confirm the card is,
+  respectively, above, right of, and left of the cat with a consistent Card offset gap.
+- Select a secondary display to the left of or above the main display. Confirm negative global
+  x or y coordinates are preserved and the card stays on the selected display.
+- Move the cat presentation location near all four visible-frame corners. Confirm the entire
+  card remains inside the work area with a small margin and does not cover the handoff anchor
+  when a collision-free position exists.
+- Present short and long title/message combinations, cards with an Open action, and persistent
+  cards with the close control. Confirm the panel height follows the content without flashing.
+- Replace a short visible card with a taller card and then reverse the order. Confirm origin and
+  size animate together, remain on-screen, and the active notification session is unchanged.
+- While a card is visible, change Position settings, display resolution, accessibility text
+  size, and action-button visibility. Confirm the card remeasures and follows the newest
+  placement without invoking dismissal.
+- Enable Dock auto-hide and repeat each Dock edge. Confirm fallback geometry remains within the
+  selected screen's visible frame.
+- On an unusually small or scaled display, confirm an oversized card is constrained to the
+  margin-adjusted visible frame and placement diagnostics report a typed degraded result.
+- Inspect card-placement logs. They may contain only Dock edge, card dimensions, clamp and
+  collision flags, placement revision, and degradation—never notification text or screen name.
+
+## Stable display selection and Dock calibration
+
+- In Automatic mode, move the pointer repeatedly between displays. Confirm DockCat stays on the
+  initially resolved main display. Disconnect that display and confirm fallback selects the current
+  main display; reconnect it and confirm Automatic does not jump back during this app run.
+- Select Main display, change the system main display, and confirm placement follows it. Select a
+  specific display, relaunch, and confirm the stable selection returns when public identity permits.
+- Disconnect a specifically selected display. Confirm Settings preserves a disconnected row and
+  warning, preview stops, runtime placement uses a non-pointer fallback, and no overlay moves to
+  `(0, 0)`. Reconnect while sleeping and confirm immediate restoration. Reconnect during travel or
+  presentation and confirm restoration waits until that presentation finishes and reaches sleeping.
+- If two connected displays have identical localized names, confirm their short identity tokens
+  distinguish the picker rows and choosing either resolves the intended geometry.
+- Move the Dock between bottom, left, and right. Confirm Position shows the inferred edge and an
+  observed, auto-hide, or ambiguous confidence. Enable auto-hide and confirm the UI labels geometry
+  as estimated and recommends calibration rather than claiming exact Dock ends.
+- Start Preview and adjust all four calibration controls. Confirm blue Home and orange Presentation
+  markers move independently, remain click-through/on-screen, and the notification queue, active
+  presentation, and transient timer are unchanged. Close Settings, disable DockCat, or remove the
+  selected display and confirm both markers disappear.
+- Save distinct calibration values on two displays and on two Dock edges, relaunch, and verify each
+  record returns only for its display/edge. Use Reset Current and Reset All and confirm the expected
+  records return to zero without changing unrelated preferences.
+- Change calibration while sleeping, travelling out, presenting, travelling home, and returning.
+  Confirm the cat moves immediately at stable anchors, active cat/card stay together, travel retargets
+  without a new notification session, and return retargets home.
+- Inspect diagnostics. They may contain only short display tokens, selection mode, availability,
+  fallback use, Dock edge/confidence, calibration presence, and preview start/stop—not full display
+  serials, hardware fingerprints, localized display names, or notification content.
+
 ## Effect-driven transitions and recovery
 
 - Send an internal transient notification and confirm the complete wake, pickup, travel, presentation, timeout, card dismissal, return, settle, and sleep flow.

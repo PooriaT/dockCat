@@ -10,7 +10,9 @@ DockCat is a native macOS 14+ menu-bar app that places a small animated cat besi
 - Separate click-through cat and interactive card `NSPanel` overlays
 - SpriteKit placeholder cat with callback-driven wake, carry, walk, wait, and settle animations
 - FIFO actor-backed queue with duplicate protection, limits, persistence blocking, pause/resume, and sequential delivery
-- Public-API Dock edge inference for bottom, left, right, multiple displays, and auto-hide fallback
+- Stable automatic/main/specific display selection using public CoreGraphics identity, with safe disconnect fallback
+- Public-API Dock edge inference for bottom, left, right, multiple displays, typed confidence, and auto-hide fallback
+- Per-display, per-Dock-edge home/presentation calibration with isolated live preview markers
 - Internal/test and validated `dockcat://notify` sources
 - Reduced-motion behavior, ServiceManagement login item support, structured logging, and XCTest coverage
 
@@ -47,6 +49,6 @@ Placeholder: run the Developer tab's presets to view the live SpriteKit cat and 
 ## Roadmap
 
 - Replace vector placeholders with an artist-authored sprite atlas
-- Add user-selectable specific displays and appearance themes
+- Add appearance themes
 - Add opt-in integrations through the `NotificationSource` protocol
 - Add a carefully sandboxed localhost source if demand justifies its security/maintenance cost

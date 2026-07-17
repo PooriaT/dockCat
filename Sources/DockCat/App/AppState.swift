@@ -20,7 +20,11 @@ final class AppState: ObservableObject {
     @Published private(set) var catState: CatState = .sleeping
     @Published private(set) var isPaused = false
     @Published private(set) var isPauseTransitioning = false
+    @Published private(set) var currentPlacement: DockPlacement?
+    @Published private var isPlacementCurrentlyResolved = false
+    @Published private(set) var isCalibrationPreviewActive = false
     let settings = SettingsStore()
+    let displayCatalog = DisplayCatalog()
     private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
         dismissalRegistry: accessibilityElementRegistry,
         eventHandler: { [weak self] event in self?.receive(sourceEvent: event) },
@@ -58,6 +62,7 @@ final class AppState: ObservableObject {
     private let catWindow = CatWindowController()
     private let cardWindow = CardWindowController()
     private let locator = DockLocator()
+    private let calibrationPreview = DockCalibrationPreviewController()
     private let presentation = PresentationSessionCoordinator()
     private var claimTask: Task<Void, Never>?
     private var disableCleanupTask: Task<Void, Never>?
@@ -72,15 +77,19 @@ final class AppState: ObservableObject {
     private var deferredExternalUpdate: DeferredExternalUpdate?
     private var deferredExternalDisappearance: DeferredExternalRemoval?
     private var dismissingNotification: DockCatNotification?
-    private var screenMonitor: ScreenChangeMonitor?
+    private var placementRefreshTask: Task<Void, Never>?
+    private var placementRevision: UInt64 = 0
+    private var lastValidPlacement: DockPlacement?
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
 
     func start() {
         systemNotificationAccess.refresh()
-        reposition()
-        catWindow.showSleeping()
+        applyNewestPlacement()
         cardWindow.onDismiss = { [weak self] in self?.dismissCurrent() }
-        screenMonitor = ScreenChangeMonitor { [weak self] in self?.reposition() }
+        displayCatalog.onChange = { [weak self] in
+            self?.objectWillChange.send()
+            self?.reposition()
+        }
         lifecycleReconciliationTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
@@ -102,10 +111,12 @@ final class AppState: ObservableObject {
         pauseTransitionTask?.cancel()
         lifecycleReconciliationTask?.cancel()
         lifecycleReconciliationTask = nil
+        placementRefreshTask?.cancel()
+        placementRefreshTask = nil
         cardWindow.forceHide()
         catWindow.cancelVisualWork()
-        screenMonitor?.stop()
-        screenMonitor = nil
+        stopCalibrationPreview()
+        displayCatalog.stop()
     }
 
     private func clearExternalNotifications() {
@@ -134,6 +145,7 @@ final class AppState: ObservableObject {
             if disableCleanupTask == nil { beginFlowIfNeeded() }
             return
         }
+        stopCalibrationPreview()
         claimTask?.cancel()
         claimTask = nil
         pauseTransitionTask?.cancel()
@@ -391,6 +403,24 @@ final class AppState: ObservableObject {
 
     func refreshPlacement() { reposition() }
 
+    var isCalibrationAvailable: Bool {
+        isPlacementCurrentlyResolved
+            && currentPlacement?.requestedDisplayAvailable == true
+    }
+
+    func startCalibrationPreview() {
+        guard settings.preferences.enabled,
+              isCalibrationAvailable,
+              let placement = currentPlacement else { return }
+        calibrationPreview.start(with: placement)
+        isCalibrationPreviewActive = true
+    }
+
+    func stopCalibrationPreview() {
+        calibrationPreview.stop()
+        isCalibrationPreviewActive = false
+    }
+
     func setPaused(_ paused: Bool) {
         guard settings.preferences.enabled, disableCleanupTask == nil else { return }
         requestedPauseState = paused
@@ -449,7 +479,8 @@ final class AppState: ObservableObject {
     }
 
     private func beginFlowIfNeeded() {
-        guard settings.preferences.enabled, disableCleanupTask == nil,
+        guard settings.preferences.enabled, lastValidPlacement != nil,
+              disableCleanupTask == nil,
               claimTask == nil, !presentation.hasChoreographyTask,
               current == nil, !isPaused, !isPauseTransitioning,
               !isRecovering else { return }
@@ -806,6 +837,9 @@ final class AppState: ObservableObject {
             applyDeferredExternalLifecycle()
         } else if machine.state == .sleeping {
             presentation.finishSession(sessionID)
+            // A specifically selected display may have reconnected while presentation
+            // was active. Sleeping is the documented safe restoration boundary.
+            reposition()
             beginFlowIfNeeded()
         }
     }
@@ -956,10 +990,90 @@ final class AppState: ObservableObject {
         beginFlowIfNeeded()
     }
 
+    /// Coalesces screen notifications and slider ticks into one main-actor refresh using
+    /// the newest preferences. The refresh never submits a CatEvent or touches the queue.
     private func reposition() {
-        let geometry = locator.locate(preferences: settings.preferences)
-        catWindow.position(at: geometry.sleepingPoint, presentationPoint: geometry.presentationPoint, dockEdge: geometry.edge)
-        cardWindow.position(above: geometry.presentationPoint, offset: settings.preferences.cardOffset)
+        guard placementRefreshTask == nil else { return }
+        placementRefreshTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, !Task.isCancelled else { return }
+            self.placementRefreshTask = nil
+            self.applyNewestPlacement()
+        }
+    }
+
+    private func applyNewestPlacement() {
+        placementRevision &+= 1
+        let logicalPlacement = CatLogicalPlacementResolver.resolve(
+            catState: machine.state,
+            presentationPhase: presentation.activePhase,
+            hasChoreographyTask: presentation.hasChoreographyTask,
+            isRecovering: isRecovering,
+            isEnabled: settings.preferences.enabled
+        )
+
+        guard let geometry = locator.locate(
+            preferences: settings.preferences,
+            catalog: displayCatalog,
+            safeToRestoreSpecific: PlacementRefreshPolicy.canRestoreSpecificDisplay(
+                catState: machine.state
+            )
+        ) else {
+            stopCalibrationPreview()
+            isPlacementCurrentlyResolved = false
+            let availability = PlacementRefreshPolicy.availabilityAction(
+                hasResolvedPlacement: false,
+                hasLastValidPlacement: lastValidPlacement != nil
+            )
+            let retainedLastValid = availability == .retainLastValidPlacement
+            logger.info(
+                "Placement refresh revision=\(self.placementRevision, privacy: .public) logical=\(logicalPlacement.rawValue, privacy: .public) motionRetargeted=false cardRebased=false fallback=false lastValid=\(retainedLastValid, privacy: .public)"
+            )
+            return
+        }
+
+        let isFirstValidPlacement = lastValidPlacement == nil
+        lastValidPlacement = geometry
+        currentPlacement = geometry
+        isPlacementCurrentlyResolved = true
+        if let migrated = geometry.migratedSelection,
+           migrated != settings.preferences.displaySelection {
+            settings.preferences.displaySelection = migrated
+        }
+        if geometry.requestedDisplayAvailable {
+            calibrationPreview.update(geometry)
+        } else {
+            stopCalibrationPreview()
+        }
+        let sessionID = presentation.activeSessionID
+        let catOutcome = catWindow.updatePlacement(
+            geometry, logicalState: logicalPlacement, sessionID: sessionID
+        )
+        // Card exclusion protects the new destination even when outbound travel preserves
+        // the panel's old origin. Dismissal rebasing separately follows the live cat rect.
+        let destinationExclusionFrame = catWindow.presentationExclusionFrame()
+        let liveHandoffRect = catWindow.handoffSourceRect()
+        let cardOutcome = cardWindow.updatePlacementContext(
+            CardPlacementContext(
+                presentationAnchor: geometry.presentationPoint,
+                dockEdge: geometry.edge,
+                visibleScreenFrame: geometry.visibleScreenFrame,
+                catExclusionFrame: destinationExclusionFrame,
+                offset: settings.preferences.cardOffset,
+                placementRevision: placementRevision
+            ),
+            logicalState: logicalPlacement,
+            dismissalSourceRect: liveHandoffRect
+        )
+        if isFirstValidPlacement {
+            // Startup with no screen leaves the overlay unordered. Delivery is gated on
+            // this first valid placement, so the reset cannot interrupt active work.
+            catWindow.resetToSleeping()
+            beginFlowIfNeeded()
+        }
+        logger.info(
+            "Placement refresh revision=\(self.placementRevision, privacy: .public) logical=\(logicalPlacement.rawValue, privacy: .public) display=\(geometry.displayIdentity.diagnosticsToken, privacy: .public) oldEdge=\(catOutcome.previousDockEdge.rawValue, privacy: .public) newEdge=\(geometry.edge.rawValue, privacy: .public) confidence=\(geometry.geometryConfidence.rawValue, privacy: .public) calibration=\(!self.settings.preferences.calibration(for: geometry.displayIdentity, edge: geometry.edge).isZero, privacy: .public) motionRetargeted=\(catOutcome.motionWasRetargeted, privacy: .public) cardRebased=\(cardOutcome.animationWasRebased, privacy: .public) fallback=\(geometry.usedDisplayFallback, privacy: .public) lastValid=false"
+        )
     }
 
     private var externalLifecycleIsStable: Bool {
