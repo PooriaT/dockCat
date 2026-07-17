@@ -4,10 +4,15 @@ import OSLog
 
 @MainActor final class SystemNotificationAccessibilitySource: SystemNotificationSourceControlling {
     enum Outcome: Equatable { case active, degraded, unavailable, permissionRequired }
+    private static let createdNotification = "AXCreated"
+    private static let childrenChangedNotification = "AXChildrenChanged"
+    private static let layoutChangedNotification = "AXLayoutChanged"
+    private static let windowCreatedNotification = "AXWindowCreated"
+    private static let valueChangedNotification = "AXValueChanged"
+    private static let elementDestroyedNotification = "AXUIElementDestroyed"
     static let structuralNotifications = [
-        kAXCreatedNotification as String, kAXChildrenChangedNotification as String,
-        kAXLayoutChangedNotification as String, kAXWindowCreatedNotification as String,
-        kAXValueChangedNotification as String, kAXUIElementDestroyedNotification as String
+        createdNotification, childrenChangedNotification, layoutChangedNotification,
+        windowCreatedNotification, valueChangedNotification, elementDestroyedNotification
     ]
     private let trust: AccessibilityTrustChecking
     private let resolver: NotificationCenterProcessResolving
@@ -111,8 +116,14 @@ import OSLog
         pendingSnapshots.removeAll(keepingCapacity: true)
     }
     private static func kind(_ name: String) -> AccessibilityNotificationSnapshot.ObservationKind {
-        switch name { case kAXCreatedNotification as String: .created; case kAXChildrenChangedNotification as String: .childrenChanged
-        case kAXLayoutChangedNotification as String: .layoutChanged; case kAXWindowCreatedNotification as String: .windowCreated
-        case kAXValueChangedNotification as String: .valueChanged; case kAXUIElementDestroyedNotification as String: .destroyed; default: .unknown }
+        switch name {
+        case createdNotification: .created
+        case childrenChangedNotification: .childrenChanged
+        case layoutChangedNotification: .layoutChanged
+        case windowCreatedNotification: .windowCreated
+        case valueChangedNotification: .valueChanged
+        case elementDestroyedNotification: .destroyed
+        default: .unknown
+        }
     }
 }

@@ -45,6 +45,11 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 ## Cancellation
 
 - Pause, disable, stop, or otherwise cancel during card presentation and confirm stale animation completion does not show, dismiss, or overwrite a later notification.
+- Pause halfway through a transient card, wait longer than its original duration, resume, and confirm only the saved remainder is visible.
+- Repeat pause/resume several times and confirm the total unpaused visible time does not grow.
+- Race the close button with transient expiry and source disappearance; confirm one card dismissal and one queue completion.
+- Update an external notification during card expansion and replacement, then remove it during wake, travel, expansion, replacement, and dismissal. Confirm disappearance wins and no old content returns.
+- Disable DockCat, revoke Accessibility permission, and quit during wake, travel, presentation, and dismissal. After each case, send a new test notification and confirm there is no stuck cat, stale panel, old-destination snap, or delayed dismissal.
 
 ## Effect-driven transitions and recovery
 

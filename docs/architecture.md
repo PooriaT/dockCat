@@ -1,10 +1,10 @@
 # Architecture notes
 
-- `AppState` is the top-level choreography owner. Its single `apply(_:)` entry point consumes typed state-machine decisions, publishes/logs accepted transitions once, and sends semantic effects through one bounded executor. Successful async effects emit the next semantic event; rejection or an impossible prerequisite stops the chain and enters fail-closed recovery.
-- `CardWindowController` owns only the AppKit panel. Its presentation, replacement, and dismissal operations are async and return `PresentationAnimationResult.completed` or `.cancelled`. Each operation has a fresh token so stale animation completions cannot mutate a newer notification's final panel state.
+- `AppState` is the top-level choreography owner. Its single `apply(_:)` entry point consumes typed state-machine decisions, while `PresentationSessionCoordinator` owns notification-specific choreography and timeout tasks. Successful async effects emit the next semantic event; rejection or an impossible prerequisite stops the chain and enters fail-closed recovery.
+- `CardWindowController` owns only the AppKit panel. Its presentation, replacement, and dismissal operations are async and return `PresentationAnimationResult.completed` or `.cancelled`. Operation tokens include the presentation session, task cancellation resumes the checked continuation immediately, and force-hide resolves pending work before resetting the panel.
 - `CatWindowController` exposes a handoff-anchor contract through `handoffSourceRect()`. The rect is derived from the cat overlay panel origin plus the documented visual anchor and mini-card carry offset, avoiding SpriteKit internals in app choreography.
 - Mini-card visibility is controlled through focused cat-window APIs. Pickup and travel keep the card visible; successful expanded-card presentation completes the handoff pose and hides the mini-card; dismissal and return home reset it.
-- Transient timers are scheduled only after the expanded-card animation completes and the state machine accepts `cardPresented`. Persistent notifications do not schedule timeout tasks.
+- Transient timers are scheduled only after the expanded-card animation completes and the state machine accepts `cardPresented`. Persistent notifications do not schedule timeout tasks. Timing uses `ContinuousPresentationClock`, never `Date`.
 - Queued replacement with stay-in-place enabled crossfades panel content without hiding the panel or sending the cat home. If stay-in-place is disabled, the expanded card dismisses before walk-home starts.
 - Reduced Motion uses shorter fades and avoids large frame travel for presentation/dismissal while preserving the same state-machine events and timer ordering.
 - Recovery drops only an inconsistent active DockCat item, preserves pending queue items, force-hides stale DockCat UI, resets cat visual work and state to sleeping, and attempts later pending work. Expected animation cancellation remains resumable and is not treated as corruption. Native system UI is not modified by recovery.
@@ -42,6 +42,18 @@ retained completed UUIDs are rejected. The oldest completed UUID becomes eligibl
 cache evicts it. External removal releases its active UUID immediately and retains no content.
 
 Remaining limitations: the handoff anchor is a stable overlay-frame contract rather than direct SpriteKit node projection, and the notification card size remains fixed for this issue.
+
+## Presentation sessions and clocks
+
+Every claimed notification receives a `PresentationSessionID` containing a monotonically increasing generation and the notification UUID. Queue advancement deliberately starts a new generation. An external content update preserves the session and increments its content revision; old replacement completions therefore fail centralized validation. IDs are never derived from notification text.
+
+The main-actor session coordinator stores the phase, revision, choreography and timeout tasks, pause state, monotonic deadline, remaining transient duration, winning dismissal cause, cancellation reason, and session-scoped deferred lifecycle markers. Replacing or cancelling a session cancels every registered child. Async completions validate session, notification, expected phase, and revision through one coordinator API before touching state, queue projection, cat motion, or card UI.
+
+`PresentationClock` exposes a monotonic instant and deadline sleep. Production uses `ContinuousClock`; deterministic tests use `ManualPresentationClock`, whose explicit advance resumes reached waiters and whose cancellation removes and resolves a waiter. When paused, the coordinator stores `max(0, deadline - now)` and cancels the wait. Resume creates a deadline from that remainder. Repeated cycles cannot restore the original duration, and remaining time is intentionally not persisted across relaunch because sessions are process-lifetime UI work.
+
+Dismissal is arbitrated once per session. User close, transient expiry, source disappearance, disable, source shutdown, permission loss, recovery, queue removal, replacement, and shutdown are explicit causes. Only the first cause can enter dismissal; later causes are stale or already dismissing. Logs record generation and cause only, never content.
+
+SpriteKit awaited actions use unique keyed operation IDs and checked continuations. Cancellation or slot replacement removes only that action and resumes `.cancelled`; loop removal stays independent. Cat panel travel is tied to the presentation token and validates before every frame or final snap. AppKit animations use cancellation handlers and deterministic completion/cancellation frames. Shutdown and recovery cancel the session before resetting visuals, so no animation waiter intentionally survives.
 # External lifecycle reconciliation
 
 `ExternalNotificationLifecycleTracker` serializes bounded visible-item state and emits typed lifecycle events. `ExternalPresentationPolicy` deterministically maps structural evidence to best-effort presentation behavior. `NotificationQueue` remains the atomic owner of pending/current items and supports identity-based update, removal, and location while preserving DockCat UUIDs and pending FIFO order.
