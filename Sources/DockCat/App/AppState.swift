@@ -4,6 +4,8 @@ import OSLog
 
 @MainActor
 final class AppState: ObservableObject {
+    private lazy var accessibilityElementRegistry = AccessibilityElementRegistry()
+    private lazy var nativeBannerDismissalPerformer = NativeBannerDismissalPerformer(registry: accessibilityElementRegistry, client: AccessibilityAPIClient())
     private enum InterruptedFlow {
         case initialPresentation(DockCatNotification)
         case replacement(DockCatNotification)
@@ -14,26 +16,79 @@ final class AppState: ObservableObject {
     @Published private(set) var catState: CatState = .sleeping
     @Published var isPaused = false
     let settings = SettingsStore()
+    private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
+        dismissalRegistry: accessibilityElementRegistry,
+        eventHandler: { [weak self] event in self?.receive(sourceEvent: event) },
+        outcomeHandler: { _ in }
+    )
+    lazy var systemNotificationAccess: SystemNotificationAccessController = {
+        let controller = SystemNotificationAccessController(
+            enabled: settings.preferences.systemNotificationsEnabled,
+            source: systemNotificationSource,
+            startImmediately: false
+        )
+        systemNotificationSource.setOutcomeHandler { [weak controller, weak self] outcome in
+            guard let controller else { return }
+            switch outcome {
+            case .active: controller.sourceDidStart()
+            case .degraded: controller.sourceDidDegrade()
+            case .unavailable: controller.sourceDidBecomeUnavailable()
+            case .permissionRequired:
+                controller.sourceDidLosePermission()
+                self?.clearExternalNotifications()
+            }
+        }
+        controller.refresh()
+        return controller
+    }()
 
     private let queue = DockCatCore.NotificationQueue()
+    private lazy var systemNotificationPipeline = SystemNotificationPipeline(
+        queue: queue, ownBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.example.DockCat"
+    )
     private var machine = CatStateMachine()
     private let catWindow = CatWindowController()
     private let cardWindow = CardWindowController()
     private let locator = DockLocator()
     private var flowTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
+    private var lifecycleReconciliationTask: Task<Void, Never>?
+    private var deferredExternalUpdates = Set<ExternalNotificationIdentity>()
+    private var deferredExternalDisappearances = Set<ExternalNotificationIdentity>()
     private var interruptedFlow: InterruptedFlow?
     private var screenMonitor: ScreenChangeMonitor?
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
 
     func start() {
+        systemNotificationAccess.refresh()
         reposition()
         catWindow.showSleeping()
         cardWindow.onDismiss = { [weak self] in self?.dismissCurrent() }
         screenMonitor = ScreenChangeMonitor { [weak self] in self?.reposition() }
+        lifecycleReconciliationTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, let self else { return }
+                let outcomes = await systemNotificationPipeline.reconcile()
+                if outcomes.contains(.removedCurrent) { dismissSourceCurrent() }
+            }
+        }
     }
 
-    func stop() { flowTask?.cancel(); timeoutTask?.cancel(); cardWindow.cancelPresentationAnimation(); screenMonitor?.stop(); screenMonitor = nil }
+    func stop() { clearExternalNotifications(); systemNotificationAccess.shutdown(); flowTask?.cancel(); timeoutTask?.cancel(); lifecycleReconciliationTask?.cancel(); lifecycleReconciliationTask = nil; cardWindow.cancelPresentationAnimation(); screenMonitor?.stop(); screenMonitor = nil }
+
+    private func clearExternalNotifications() {
+        Task {
+            let outcomes = await systemNotificationPipeline.sourceStopped()
+            if outcomes.contains(.removedCurrent) { dismissSourceCurrent() }
+        }
+    }
+
+    func setSystemNotificationsEnabled(_ enabled: Bool) {
+        settings.preferences.systemNotificationsEnabled = enabled
+        if !enabled { clearExternalNotifications() }
+        systemNotificationAccess.setEnabled(enabled)
+    }
 
     func sendTest(persistent: Bool = false) {
         submit(.init(sourceName: "DockCat", title: persistent ? "Persistent alert" : "Hello from DockCat",
@@ -49,6 +104,96 @@ final class AppState: ObservableObject {
             logger.info("Notification received: \(notification.id, privacy: .public), result: \(String(describing: result), privacy: .public)")
             guard result == .accepted, !isPaused else { return }
             beginFlowIfNeeded()
+        }
+    }
+
+    func receive(sourceEvent: NotificationSourceEvent) {
+        switch sourceEvent {
+        case .notification(let notification), .oneShot(let notification): submit(notification)
+        case .appeared(let external): submit(external.notification)
+        case .updated(let external): handleExternalUpdate(external.notification)
+        case .disappeared(let identity): handleExternalDisappearance(identity)
+        case .accessibilitySnapshot(let snapshot):
+            guard settings.preferences.enabled else { return }
+            Task {
+                await queue.setLimit(settings.preferences.queueLimit)
+                let result = await systemNotificationPipeline.ingest(
+                    snapshot, transientDuration: settings.preferences.defaultTransientDuration
+                )
+                logger.info("Accessibility notification result: \(String(describing: result), privacy: .public)")
+                if settings.preferences.isNativeBannerDismissalEnabled,
+                   systemNotificationAccess.health.isHealthy,
+                   let request = await systemNotificationPipeline.takeDismissalRequest() {
+                    let exclusions = Set(DockCatPreferences.normalizedBundleIdentifiers(
+                        settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers
+                    ))
+                    let outcome = nativeBannerDismissalPerformer.perform(
+                        token: request.tokenIdentifier, sourceBundleIdentifier: request.sourceBundleIdentifier,
+                        notificationSubtreePath: request.notificationSubtreePath,
+                        stableContainerIdentifier: request.stableContainerIdentifier, excluded: exclusions,
+                        ownBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.example.DockCat"
+                    )
+                    logger.info("Native banner dismissal outcome=\(String(describing: outcome), privacy: .public)")
+                    if outcome == .permissionRequired { systemNotificationAccess.sourceDidLosePermission() }
+                }
+                guard !isPaused else { return }
+                switch result {
+                case .enqueued: beginFlowIfNeeded()
+                case .updatedCurrent: await replaceUpdatedCurrent()
+                case .removedCurrent: dismissSourceCurrent()
+                default: break
+                }
+            }
+        }
+    }
+
+    private func handleExternalUpdate(_ notification: DockCatNotification) {
+        Task { _ = await queue.updateExternal(notification); await replaceUpdatedCurrent() }
+    }
+
+    private func replaceUpdatedCurrent() async {
+        guard let queued = await queue.currentNotification(), let identity = queued.externalIdentity else { return }
+        guard flowTask == nil, machine.state == .waitingForDismissal else {
+            deferredExternalUpdates.insert(identity)
+            return
+        }
+        let updated = queued
+        deferredExternalUpdates.remove(identity)
+        timeoutTask?.cancel()
+        current = updated
+        guard machine.handle(.notificationUpdated) else { return }
+        updateState()
+        flowTask = Task { [weak self] in await self?.presentReplacement(updated) }
+    }
+
+    private func handleExternalDisappearance(_ identity: ExternalNotificationIdentity) {
+        Task {
+            let result = await queue.removeExternal(identity)
+            if result == .removedCurrent { dismissSourceCurrent() }
+        }
+    }
+
+    private func dismissSourceCurrent() {
+        guard let identity = current?.externalIdentity else { return }
+        guard flowTask == nil, machine.state == .waitingForDismissal else {
+            deferredExternalDisappearances.insert(identity)
+            return
+        }
+        deferredExternalDisappearances.remove(identity)
+        deferredExternalUpdates.remove(identity)
+        timeoutTask?.cancel()
+        advanceAfterDismissal(event: .sourceDisappeared)
+    }
+
+    /// Applies lifecycle work that arrived while wake/travel/card animation owned the flow.
+    /// Disappearance wins over an update because its queue item has already been removed.
+    private func applyDeferredExternalLifecycle() async {
+        guard flowTask == nil, machine.state == .waitingForDismissal,
+              let identity = current?.externalIdentity else { return }
+        if deferredExternalDisappearances.contains(identity) {
+            dismissSourceCurrent()
+        } else if deferredExternalUpdates.contains(identity) {
+            await replaceUpdatedCurrent()
         }
     }
 
@@ -121,8 +266,9 @@ final class AppState: ObservableObject {
         interruptedFlow = nil
         catWindow.completeHandoffPose()
         _ = machine.handle(.cardPresented); updateState()
-        scheduleTimeoutIfNeeded(item)
         flowTask = nil
+        await applyDeferredExternalLifecycle()
+        if flowTask == nil { scheduleTimeoutIfNeeded(item) }
     }
 
     private func presentReplacement(_ item: DockCatNotification) async {
@@ -136,8 +282,9 @@ final class AppState: ObservableObject {
         }
         interruptedFlow = nil
         _ = machine.handle(.cardPresented); updateState()
-        scheduleTimeoutIfNeeded(item)
         flowTask = nil
+        await applyDeferredExternalLifecycle()
+        if flowTask == nil { scheduleTimeoutIfNeeded(item) }
     }
 
     private func finishDismissal(_ item: DockCatNotification) async {
@@ -173,6 +320,7 @@ final class AppState: ObservableObject {
         timeoutTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(duration))
             guard !Task.isCancelled else { return }
+            guard self?.current?.id == item.id else { return }
             self?.advanceAfterDismissal(event: .transientExpired)
         }
     }

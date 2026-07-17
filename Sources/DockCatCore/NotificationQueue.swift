@@ -2,6 +2,10 @@ import Foundation
 
 public actor NotificationQueue {
     public enum EnqueueResult: Equatable, Sendable { case accepted, duplicate, full }
+    public enum ExternalMutationResult: Equatable, Sendable {
+        case inserted, updatedCurrent, updatedPending, removedCurrent, removedPending, notFound, duplicate, full
+    }
+    public enum ExternalLocation: Equatable, Sendable { case current, pending(index: Int) }
 
     private var pending: [DockCatNotification] = []
     private var current: DockCatNotification?
@@ -17,6 +21,30 @@ public actor NotificationQueue {
         knownIDs.insert(notification.id)
         pending.append(notification)
         return .accepted
+    }
+
+    public func enqueueAppeared(_ notification: DockCatNotification) -> ExternalMutationResult {
+        guard let identity = notification.externalIdentity else { return .notFound }
+        guard location(of: identity) == nil else { return .duplicate }
+        switch enqueue(notification) { case .accepted: return .inserted; case .duplicate: return .duplicate; case .full: return .full }
+    }
+
+    public func updateExternal(_ notification: DockCatNotification) -> ExternalMutationResult {
+        guard let identity = notification.externalIdentity else { return .notFound }
+        if let old = current, old.externalIdentity == identity { current = notification.preservingIdentity(of: old); return .updatedCurrent }
+        guard let index = pending.firstIndex(where: { $0.externalIdentity == identity }) else { return .notFound }
+        pending[index] = notification.preservingIdentity(of: pending[index]); return .updatedPending
+    }
+
+    public func removeExternal(_ identity: ExternalNotificationIdentity) -> ExternalMutationResult {
+        if current?.externalIdentity == identity { current = nil; return .removedCurrent }
+        guard let index = pending.firstIndex(where: { $0.externalIdentity == identity }) else { return .notFound }
+        pending.remove(at: index); return .removedPending
+    }
+
+    public func location(of identity: ExternalNotificationIdentity) -> ExternalLocation? {
+        if current?.externalIdentity == identity { return .current }
+        return pending.firstIndex(where: { $0.externalIdentity == identity }).map(ExternalLocation.pending)
     }
 
     public func next() -> DockCatNotification? {
@@ -39,4 +67,11 @@ public actor NotificationQueue {
     public func hasPending() -> Bool { !pending.isEmpty }
     public func count() -> Int { pending.count + (current == nil ? 0 : 1) }
     public func currentNotification() -> DockCatNotification? { current }
+}
+
+private extension DockCatNotification {
+    func preservingIdentity(of old: DockCatNotification) -> DockCatNotification {
+        .init(id: old.id, sourceName: sourceName, title: title, message: message, presentation: presentation,
+              actionURL: actionURL, createdAt: old.createdAt, externalIdentity: externalIdentity, classification: classification)
+    }
 }

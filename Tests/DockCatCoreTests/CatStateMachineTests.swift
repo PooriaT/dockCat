@@ -2,6 +2,14 @@ import XCTest
 @testable import DockCatCore
 
 final class CatStateMachineTests: XCTestCase {
+    func testExternalUpdateAndDisappearanceUsePresentationOrdering() {
+        var machine = CatStateMachine()
+        XCTAssertTrue(machine.handle(.notificationAvailable)); XCTAssertTrue(machine.handle(.animationCompleted))
+        XCTAssertTrue(machine.handle(.animationCompleted)); XCTAssertTrue(machine.handle(.animationCompleted)); XCTAssertTrue(machine.handle(.cardPresented))
+        XCTAssertTrue(machine.handle(.notificationUpdated)); XCTAssertEqual(machine.state, .presenting)
+        XCTAssertTrue(machine.handle(.cardPresented)); XCTAssertTrue(machine.handle(.sourceDisappeared))
+        XCTAssertEqual(machine.state, .preparingNextNotification)
+    }
     func testFullTransientFlowRequiresCardDismissedBeforeReturnHome() {
         var machine = CatStateMachine()
         let events: [CatEvent] = [.notificationAvailable, .animationCompleted, .animationCompleted, .animationCompleted, .cardPresented, .transientExpired, .queueEmpty, .cardDismissed, .animationCompleted, .animationCompleted]

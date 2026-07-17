@@ -1,5 +1,7 @@
 # DockCat
 
+> The experimental System Notifications integration includes an independently opt-in, disabled-by-default best-effort operation to close an original banner *after* DockCat accepts its mirror. It does not prevent native banners: they may appear briefly or remain, and compatibility may change with macOS updates. Detection fails closed, executes no content actions, and bundle-identifier exclusions do not affect mirroring.
+
 DockCat is a native macOS 14+ menu-bar app that places a small animated cat beside the Dock. Internal notifications wake the cat, send it toward the Dock centre with a card, and return it home when the queue becomes idle.
 
 ## Current capabilities
@@ -12,7 +14,7 @@ DockCat is a native macOS 14+ menu-bar app that places a small animated cat besi
 - Internal/test and validated `dockcat://notify` sources
 - Reduced-motion behavior, ServiceManagement login item support, structured logging, and XCTest coverage
 
-DockCat deliberately does **not** intercept other apps' notifications. macOS has no supported public API for doing so, and this project avoids private Dock/Notification Center APIs, accessibility scraping, injection, OCR, and screen scraping.
+DockCat does not currently mirror other apps' notifications. Settings includes a disabled-by-default, experimental System Notifications permission-onboarding control for a future observer. Accessibility permission is requested only after the user presses the request button; no observer or Accessibility-tree parsing exists yet. DockCat continues to avoid private APIs, injection, OCR, screen scraping, and direct Notification Center database access.
 
 ## Build and run
 
