@@ -34,15 +34,18 @@ final class ExternalNotificationLifecycleTests: XCTestCase, @unchecked Sendable 
     }
 
     func testExternalQueueMutationsPreserveFIFOAndInternalUUID() async {
-        let queue = NotificationQueue(limit: 3), first = external("a"), second = external("b")
-        let inserted = await queue.enqueueAppeared(first.notification); XCTAssertEqual(inserted, .inserted)
-        let duplicate = await queue.enqueueAppeared(first.notification); XCTAssertEqual(duplicate, .duplicate)
-        let insertedSecond = await queue.enqueueAppeared(second.notification); XCTAssertEqual(insertedSecond, .inserted)
+        let queue = DockCatCore.NotificationQueue(limit: 3), first = external("a"), second = external("b")
+        guard case .inserted = await queue.enqueueAppeared(first.notification) else { return XCTFail("Expected insert") }
+        guard case .duplicate = await queue.enqueueAppeared(first.notification) else { return XCTFail("Expected duplicate") }
+        guard case .inserted = await queue.enqueueAppeared(second.notification) else { return XCTFail("Expected insert") }
         let changed = external("b", message: "new")
-        let update = await queue.updateExternal(changed.notification); XCTAssertEqual(update, .updatedPending)
-        let removePending = await queue.removeExternal(first.identity); XCTAssertEqual(removePending, .removedPending)
-        let next = await queue.next(); XCTAssertEqual(next?.message, "new")
-        let removeCurrent = await queue.removeExternal(second.identity); XCTAssertEqual(removeCurrent, .removedCurrent)
-        let missing = await queue.removeExternal(second.identity); XCTAssertEqual(missing, .notFound)
+        guard case .updatedPending(_, let index, _) = await queue.updateExternal(changed.notification) else { return XCTFail("Expected pending update") }
+        XCTAssertEqual(index, 1)
+        guard case .removedPending(let removed, _, _) = await queue.removeExternal(first.identity) else { return XCTFail("Expected pending removal") }
+        XCTAssertEqual(removed.id, first.notification.id)
+        guard case .promoted(let next, _) = await queue.claimNext() else { return XCTFail("Expected claim") }
+        XCTAssertEqual(next.message, "new")
+        guard case .removedCurrent = await queue.removeExternal(second.identity) else { return XCTFail("Expected current removal") }
+        guard case .notFound = await queue.removeExternal(second.identity) else { return XCTFail("Expected no-op removal") }
     }
 }

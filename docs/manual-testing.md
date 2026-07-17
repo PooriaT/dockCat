@@ -30,6 +30,13 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 - Queue three transient notifications with stay-in-place enabled and confirm card content transitions in place without walk-home, settle, sleep, or panel flashing.
 - Confirm each timeout starts after its own replacement completes.
 - Disable stay-in-place and confirm each card dismisses before the cat returns home between notifications.
+- Pause while idle, enqueue several notifications, and confirm none presents until resume.
+- Pause while a card is visible, enqueue more notifications, then resume and confirm the visible card remains authoritative before FIFO delivery continues.
+- Toggle pause/resume rapidly from both Settings and the menu bar. Confirm controls disable during an actor transition and the final published state, visuals, and queue behavior match the final request.
+- Update an active external notification and confirm replacement uses the updated payload without duplicate presentation.
+- Remove active and pending external notifications. Confirm active removal follows ordered card dismissal/replacement and pending removal never presents.
+- Change the queue limit while items are present. Existing items must remain ordered; only later admissions use the new limit.
+- Inspect queue and transition logs. They may include UUIDs, revisions, counts, limits, and outcome categories, but never notification content.
 
 ## Reduced Motion
 
@@ -38,6 +45,21 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 ## Cancellation
 
 - Pause, disable, stop, or otherwise cancel during card presentation and confirm stale animation completion does not show, dismiss, or overwrite a later notification.
+- Pause halfway through a transient card, wait longer than its original duration, resume, and confirm only the saved remainder is visible.
+- Repeat pause/resume several times and confirm the total unpaused visible time does not grow.
+- Race the close button with transient expiry and source disappearance; confirm one card dismissal and one queue completion.
+- Update an external notification during card expansion and replacement, then remove it during wake, travel, expansion, replacement, and dismissal. Confirm disappearance wins and no old content returns.
+- Disable DockCat, revoke Accessibility permission, and quit during wake, travel, presentation, and dismissal. After each case, send a new test notification and confirm there is no stuck cat, stale panel, old-destination snap, or delayed dismissal.
+
+## Effect-driven transitions and recovery
+
+- Send an internal transient notification and confirm the complete wake, pickup, travel, presentation, timeout, card dismissal, return, settle, and sleep flow.
+- Send an internal persistent notification and confirm it waits for close before ordered dismissal and return.
+- Queue three notifications with stay-in-place enabled and confirm each replacement remains at the presentation anchor.
+- Update an active external item and confirm replacement; remove it and confirm ordered card dismissal before return home.
+- Pause during travel and during card animation, then resume and confirm the prior state/effect continues.
+- Through a debug-only test seam, submit an invalid event and confirm no later effect runs, stale DockCat UI is hidden, the cat resets to sleeping, and a later notification can present.
+- Inspect transition and recovery logs. They may contain states, events, effect categories, reasons, and identifiers, but no title, body, AX text, or card content.
 
 ## Experimental System Notifications onboarding
 

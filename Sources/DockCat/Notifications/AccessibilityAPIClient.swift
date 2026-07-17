@@ -35,7 +35,7 @@ extension AccessibilityAPIClientProtocol {
 @MainActor final class AccessibilityAPIClient: AccessibilityAPIClientProtocol {
     private final class Element: AccessibilityElementReference {
         let raw: AXUIElement; init(_ raw: AXUIElement) { self.raw = raw }
-        var traversalIdentifier: Int { CFHash(raw) }
+        var traversalIdentifier: Int { Int(truncatingIfNeeded: CFHash(raw)) }
     }
     private final class Observer: AccessibilityObserverReference {
         let raw: AXObserver; let box: CallbackBox
@@ -74,7 +74,9 @@ extension AccessibilityAPIClientProtocol {
         ((try value(attribute, element) as? [AXUIElement]) ?? []).map(Element.init)
     }
     func element(_ attribute: AccessibilityAttribute, of element: any AccessibilityElementReference) throws -> (any AccessibilityElementReference)? {
-        guard let raw = try value(attribute, element) as? AXUIElement else { return nil }; return Element(raw)
+        guard let value = try value(attribute, element),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return Element(unsafeDowncast(value, to: AXUIElement.self))
     }
     func actions(of element: any AccessibilityElementReference) throws -> [String] {
         var names: CFArray?; let result = AXUIElementCopyActionNames(raw(element), &names)

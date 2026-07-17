@@ -14,7 +14,7 @@ import XCTest
         let outcome = NativeBannerDismissalPerformer(registry: registry, client: api, trust: DismissalTrust()).perform(
             token: token.identifier, sourceBundleIdentifier: "org.example.source", notificationSubtreePath: [1],
             stableContainerIdentifier: "notification.second", excluded: [], ownBundleIdentifier: "org.example.dockcat")
-        XCTAssertEqual(outcome, .rejected)
+        XCTAssertEqual(outcome, .unsupported)
         XCTAssertTrue(api.pressed.isEmpty)
     }
 

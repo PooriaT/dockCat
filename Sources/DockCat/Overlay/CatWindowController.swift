@@ -14,6 +14,7 @@ final class CatWindowController {
     private var presentationPoint = CGPoint.zero
     private var dockEdge: DockEdge = .bottom
     private var isMotionPaused = false
+    private var motionResumeWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private lazy var motionDriver = CatMotionDriver(updater: panel)
 
     private enum AnchorOffset {
@@ -48,37 +49,78 @@ final class CatWindowController {
         panel.setFrameOrigin(Self.panelOrigin(forVisualAnchor: sleeping))
     }
     func showSleeping() { panel.orderFrontRegardless(); scene.playLoop() }
-    func animate(_ animation: CatAnimation, speed: Double, reducedMotion: Bool) async {
+    func animate(
+        _ animation: CatAnimation,
+        speed: Double,
+        reducedMotion: Bool,
+        sessionID: PresentationSessionID
+    ) async -> PresentationAnimationResult {
         if let targetOrigin = targetOrigin(for: animation) {
-            await animateTravel(animation, targetOrigin: targetOrigin, speed: speed, reducedMotion: reducedMotion)
+            return await animateTravel(
+                animation, targetOrigin: targetOrigin, speed: speed,
+                reducedMotion: reducedMotion, sessionID: sessionID
+            )
         } else {
-            await scene.runAsync(animation, duration: CatMotionTiming.minimumDuration / max(CatMotionTiming.minimumSpeed, min(speed, CatMotionTiming.maximumSpeed)), reducedMotion: reducedMotion)
+            return await scene.runAsync(
+                animation,
+                duration: CatMotionTiming.minimumDuration / max(
+                    CatMotionTiming.minimumSpeed, min(speed, CatMotionTiming.maximumSpeed)
+                ),
+                reducedMotion: reducedMotion
+            )
         }
     }
 
-    private func animateTravel(_ animation: CatAnimation, targetOrigin: CGPoint, speed: Double, reducedMotion: Bool) async {
+    private func animateTravel(
+        _ animation: CatAnimation,
+        targetOrigin destinationOrigin: CGPoint,
+        speed: Double,
+        reducedMotion: Bool,
+        sessionID: PresentationSessionID
+    ) async -> PresentationAnimationResult {
         let purpose: CatTravelPurpose = switch animation { case .walkHome: .home; default: .presentation }
-        var plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(targetOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
+        var plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(destinationOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
         let turn = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .turning, reducedMotion: reducedMotion)
         var walk = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .walking, reducedMotion: reducedMotion)
-        await scene.runAsync(purpose == .home ? .turnHome(turn) : .turnToPresentation(turn), duration: 0.18, reducedMotion: reducedMotion)
-        await scene.runAsync(purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk), duration: plan.duration, reducedMotion: reducedMotion)
-        var result = await motionDriver.move(to: targetOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
+        guard await scene.runAsync(
+            purpose == .home ? .turnHome(turn) : .turnToPresentation(turn),
+            duration: 0.18, reducedMotion: reducedMotion
+        ) == .completed, !Task.isCancelled else { return .cancelled }
+        guard await scene.runAsync(
+            purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk),
+            duration: plan.duration, reducedMotion: reducedMotion
+        ) == .completed, !Task.isCancelled else { return .cancelled }
+        var result = await motionDriver.move(
+            to: destinationOrigin, dockEdge: dockEdge, speed: speed,
+            reducedMotion: reducedMotion, presentationSessionID: sessionID
+        )
         while result == .cancelled, !Task.isCancelled {
             scene.stopLocomotion(cancelled: true, context: walk)
-            while isMotionPaused, !Task.isCancelled { try? await Task.sleep(nanoseconds: 50_000_000) }
-            guard !Task.isCancelled, let currentTargetOrigin = targetOrigin(for: animation) else { return }
+            guard await waitForMotionResume() else { return .cancelled }
+            guard !Task.isCancelled, let currentTargetOrigin = targetOrigin(for: animation) else {
+                return .cancelled
+            }
             plan = CatMotionPlanner.plan(from: CatMotionPoint(panel.frame.origin), requestedDestination: CatMotionPoint(currentTargetOrigin), dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
             walk = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .walking, reducedMotion: reducedMotion)
-            await scene.runAsync(purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk), duration: plan.duration, reducedMotion: reducedMotion)
-            result = await motionDriver.move(to: currentTargetOrigin, dockEdge: dockEdge, speed: speed, reducedMotion: reducedMotion)
+            guard await scene.runAsync(
+                purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk),
+                duration: plan.duration, reducedMotion: reducedMotion
+            ) == .completed, !Task.isCancelled else { return .cancelled }
+            result = await motionDriver.move(
+                to: currentTargetOrigin, dockEdge: dockEdge, speed: speed,
+                reducedMotion: reducedMotion, presentationSessionID: sessionID
+            )
         }
+        guard !Task.isCancelled else { return .cancelled }
         scene.stopLocomotion(cancelled: result == .cancelled, context: walk)
-        guard result == .completed else { return }
+        guard result == .completed else { return .cancelled }
         if purpose == .presentation {
             let stop = CatLocomotionResolver.travelContext(from: plan.start, to: plan.destination, dockEdge: dockEdge, purpose: purpose, phase: .stopping, reducedMotion: reducedMotion)
-            await scene.runAsync(.stopAtPresentation(stop), duration: 0.15, reducedMotion: reducedMotion)
+            return await scene.runAsync(
+                .stopAtPresentation(stop), duration: 0.15, reducedMotion: reducedMotion
+            )
         }
+        return .completed
     }
 
     func showCarriedCard() { scene.showCarriedMiniCard() }
@@ -92,5 +134,48 @@ final class CatWindowController {
         return CGRect(x: center.x - 18, y: center.y - 12, width: 36, height: 24)
     }
     func pause() { isMotionPaused = true; motionDriver.cancelActiveMotion(); scene.isPaused = true }
-    func resume() { isMotionPaused = false; scene.isPaused = false }
+    func resume() {
+        isMotionPaused = false
+        scene.isPaused = false
+        resolveMotionResumeWaiters(resumed: true)
+    }
+    func cancelVisualWork() {
+        isMotionPaused = false
+        scene.isPaused = false
+        resolveMotionResumeWaiters(resumed: false)
+        motionDriver.cancelActiveMotion()
+        scene.cancelAnimations()
+    }
+    func resetToSleeping() {
+        cancelVisualWork()
+        scene.resetToSleeping()
+        panel.setFrameOrigin(Self.panelOrigin(forVisualAnchor: sleepingPoint))
+        panel.alphaValue = 1
+        panel.orderFrontRegardless()
+    }
+
+    private func waitForMotionResume() async -> Bool {
+        guard isMotionPaused else { return !Task.isCancelled }
+        let waiterID = UUID()
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled else { return false }
+            return await withCheckedContinuation { continuation in
+                if isMotionPaused {
+                    motionResumeWaiters[waiterID] = continuation
+                } else {
+                    continuation.resume(returning: true)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.motionResumeWaiters.removeValue(forKey: waiterID)?.resume(returning: false)
+            }
+        }
+    }
+
+    private func resolveMotionResumeWaiters(resumed: Bool) {
+        let waiters = Array(motionResumeWaiters.values)
+        motionResumeWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: resumed) }
+    }
 }

@@ -13,6 +13,14 @@ final class CatScene: SKScene {
     private var frontPaw: SKShapeNode?
     private let orange = SKColor(red: 0.94, green: 0.49, blue: 0.16, alpha: 1)
     private let darkOrange = SKColor(red: 0.55, green: 0.23, blue: 0.08, alpha: 1)
+    private struct PendingAnimation {
+        let node: SKNode
+        let actionKey: String
+        let slot: String
+        let continuation: CheckedContinuation<PresentationAnimationResult, Never>
+    }
+    private var pendingAnimations: [UUID: PendingAnimation] = [:]
+    private var activeOperationBySlot: [String: UUID] = [:]
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -65,7 +73,13 @@ final class CatScene: SKScene {
         static let settle = "cat.settle"
     }
 
-    func run(_ animation: CatAnimation, duration: TimeInterval, reducedMotion: Bool, completion: @escaping @MainActor () -> Void) {
+    private func run(
+        _ animation: CatAnimation,
+        duration: TimeInterval,
+        reducedMotion: Bool,
+        actionKey: String,
+        completion: @escaping @MainActor () -> Void
+    ) {
         let d = max(0.05, reducedMotion ? min(0.2, duration) : duration)
         switch animation {
         case .sleep:
@@ -74,21 +88,21 @@ final class CatScene: SKScene {
             completion()
         case .wake:
             stopBreathing()
-            cat.run(.sequence([.rotate(toAngle: 0.08, duration: d / 2), .rotate(toAngle: 0, duration: d / 2), .run { completion() }]), withKey: ActionKey.turn)
+            cat.run(.sequence([.rotate(toAngle: 0.08, duration: d / 2), .rotate(toAngle: 0, duration: d / 2), .run { completion() }]), withKey: actionKey)
         case .pickUp:
             stopBreathing()
             showMiniCard()
             card.alpha = 0
-            card.run(.sequence([.fadeIn(withDuration: d), .run { completion() }]), withKey: ActionKey.cardPickup)
+            card.run(.sequence([.fadeIn(withDuration: d), .run { completion() }]), withKey: actionKey)
         case .turnToPresentation(let context), .turnHome(let context):
             stopBreathing()
             let transform = facingTransform(for: context.facing)
             cat.xScale = transform.xScale
             if reducedMotion {
                 cat.zRotation = transform.rotation
-                cat.run(.sequence([.wait(forDuration: d), .run { completion() }]), withKey: ActionKey.turn)
+                cat.run(.sequence([.wait(forDuration: d), .run { completion() }]), withKey: actionKey)
             } else {
-                cat.run(.sequence([.rotate(toAngle: transform.rotation, duration: d, shortestUnitArc: true), .run { completion() }]), withKey: ActionKey.turn)
+                cat.run(.sequence([.rotate(toAngle: transform.rotation, duration: d, shortestUnitArc: true), .run { completion() }]), withKey: actionKey)
             }
         case .walkToPresentationLoop(let context), .walkHomeLoop(let context):
             stopBreathing()
@@ -107,7 +121,7 @@ final class CatScene: SKScene {
             stopWalkLoop()
             applyFacing(context.facing, animated: false, duration: 0)
             setStoppedPose(carrying: context.isCarryingMiniCard)
-            cat.run(.sequence([.wait(forDuration: d), .run { completion() }]))
+            cat.run(.sequence([.wait(forDuration: d), .run { completion() }]), withKey: actionKey)
         case .wait:
             stopWalkLoop()
             showMiniCard()
@@ -116,16 +130,92 @@ final class CatScene: SKScene {
         case .settle:
             stopWalkLoop()
             hideMiniCard()
-            cat.run(.sequence([.scaleY(to: 0.82, duration: d), .run { [weak self] in self?.playLoop(); completion() }]), withKey: ActionKey.settle)
+            cat.run(.sequence([.scaleY(to: 0.82, duration: d), .run { [weak self] in self?.playLoop(); completion() }]), withKey: actionKey)
         }
     }
 
-    func runAsync(_ animation: CatAnimation, duration: TimeInterval, reducedMotion: Bool) async {
-        await withCheckedContinuation { continuation in
-            run(animation, duration: duration, reducedMotion: reducedMotion) {
-                continuation.resume()
+    func runAsync(
+        _ animation: CatAnimation,
+        duration: TimeInterval,
+        reducedMotion: Bool
+    ) async -> PresentationAnimationResult {
+        let operationID = UUID()
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled else { return .cancelled }
+            return await withCheckedContinuation { continuation in
+                let slot = animationSlot(animation)
+                if let previous = activeOperationBySlot[slot] { cancelAnimation(previous) }
+                let node = actionNode(animation)
+                let actionKey = "cat.awaited.\(operationID.uuidString)"
+                pendingAnimations[operationID] = PendingAnimation(
+                    node: node, actionKey: actionKey, slot: slot, continuation: continuation
+                )
+                activeOperationBySlot[slot] = operationID
+                run(
+                    animation, duration: duration, reducedMotion: reducedMotion,
+                    actionKey: actionKey
+                ) { [weak self] in
+                    self?.finishAnimation(operationID, result: .completed)
+                }
             }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelAnimation(operationID) }
         }
+    }
+
+    /// Cancels every visual operation and resolves its waiter. Resolving waiters is required
+    /// so recovery cannot strand a flow task in a continuation.
+    func cancelAnimations() {
+        cat.removeAllActions()
+        card.removeAllActions()
+        tail?.removeAllActions()
+        frontPaw?.removeAllActions()
+        hindPaw?.removeAllActions()
+        let operationIDs = Array(pendingAnimations.keys)
+        operationIDs.forEach(cancelAnimation)
+    }
+
+    func resetToSleeping() {
+        cancelAnimations()
+        hideMiniCard()
+        stopWalkLoop()
+        body.yScale = 1
+        head.position = CGPoint(x: 31, y: 14)
+        cat.position = CGPoint(x: size.width / 2 - 3, y: 34)
+        cat.setScale(1)
+        cat.zRotation = 0
+        playLoop()
+    }
+
+    private func finishAnimation(
+        _ operationID: UUID,
+        result: PresentationAnimationResult
+    ) {
+        guard let pending = pendingAnimations.removeValue(forKey: operationID) else { return }
+        if activeOperationBySlot[pending.slot] == operationID {
+            activeOperationBySlot.removeValue(forKey: pending.slot)
+        }
+        pending.continuation.resume(returning: result)
+    }
+
+    private func cancelAnimation(_ operationID: UUID) {
+        guard let pending = pendingAnimations[operationID] else { return }
+        pending.node.removeAction(forKey: pending.actionKey)
+        finishAnimation(operationID, result: .cancelled)
+    }
+
+    private func animationSlot(_ animation: CatAnimation) -> String {
+        switch animation {
+        case .pickUp: "pickup"
+        case .settle: "settle"
+        case .walkToPresentationLoop, .walkHomeLoop: "locomotion-loop"
+        default: "body"
+        }
+    }
+
+    private func actionNode(_ animation: CatAnimation) -> SKNode {
+        if case .pickUp = animation { return card }
+        return cat
     }
 
     func stopLocomotion(cancelled: Bool, context: CatAnimationContext?) {
