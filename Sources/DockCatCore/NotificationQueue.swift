@@ -7,6 +7,7 @@ public actor NotificationQueue {
     public typealias CompletionResult = NotificationQueueCompletionResult
     public typealias PauseResult = NotificationQueuePauseResult
     public typealias LimitResult = NotificationQueueLimitResult
+    public typealias ClearResult = NotificationQueueClearResult
     public typealias ExternalMutationResult = NotificationQueueExternalMutationResult
     public typealias ExternalLocation = NotificationQueueExternalLocation
 
@@ -17,6 +18,7 @@ public actor NotificationQueue {
     private var paused = false
     private var revision: NotificationQueueRevision = 0
     private var limit: Int
+    private var runtimeGeneration: UInt64?
 
     public init(limit: Int = 20, recentCompletionCapacity: Int = 256) {
         self.limit = max(1, limit)
@@ -44,6 +46,18 @@ public actor NotificationQueue {
         return .accepted(revision: revision)
     }
 
+    public func activateRuntimeGeneration(_ generation: UInt64) {
+        runtimeGeneration = generation
+    }
+
+    public func enqueue(
+        _ notification: DockCatNotification,
+        runtimeGeneration generation: UInt64
+    ) -> EnqueueResult {
+        guard runtimeGeneration == generation else { return .duplicate(revision: revision) }
+        return enqueue(notification)
+    }
+
     public func enqueueAppeared(_ notification: DockCatNotification) -> ExternalMutationResult {
         guard let identity = notification.externalIdentity else { return .notFound(revision: revision) }
         guard location(of: identity) == nil else { return .duplicate(revision: revision) }
@@ -55,6 +69,14 @@ public actor NotificationQueue {
         case .full:
             return .full(revision: revision)
         }
+    }
+
+    public func enqueueAppeared(
+        _ notification: DockCatNotification,
+        runtimeGeneration generation: UInt64
+    ) -> ExternalMutationResult {
+        guard runtimeGeneration == generation else { return .notFound(revision: revision) }
+        return enqueueAppeared(notification)
     }
 
     public func updateExternal(_ notification: DockCatNotification) -> ExternalMutationResult {
@@ -78,6 +100,14 @@ public actor NotificationQueue {
         return .updatedPending(notification: updated, index: index, revision: revision)
     }
 
+    public func updateExternal(
+        _ notification: DockCatNotification,
+        runtimeGeneration generation: UInt64
+    ) -> ExternalMutationResult {
+        guard runtimeGeneration == generation else { return .notFound(revision: revision) }
+        return updateExternal(notification)
+    }
+
     public func removeExternal(_ identity: ExternalNotificationIdentity) -> ExternalMutationResult {
         if let current, current.externalIdentity == identity {
             self.current = nil
@@ -92,6 +122,14 @@ public actor NotificationQueue {
         activeIDs.remove(removed.id)
         didMutate()
         return .removedPending(notification: removed, index: index, revision: revision)
+    }
+
+    public func removeExternal(
+        _ identity: ExternalNotificationIdentity,
+        runtimeGeneration generation: UInt64
+    ) -> ExternalMutationResult {
+        guard runtimeGeneration == generation else { return .notFound(revision: revision) }
+        return removeExternal(identity)
     }
 
     public func location(of identity: ExternalNotificationIdentity) -> ExternalLocation? {
@@ -153,6 +191,44 @@ public actor NotificationQueue {
         limit = normalized
         didMutate()
         return .changed(previous: previous, current: limit, revision: revision)
+    }
+
+    public func setLimit(
+        _ value: Int,
+        runtimeGeneration generation: UInt64
+    ) -> LimitResult {
+        guard runtimeGeneration == generation else {
+            return .unchanged(current: limit, revision: revision)
+        }
+        return setLimit(value)
+    }
+
+    /// Atomically removes all deliverable work and resets delivery pause for global disable.
+    /// Recent completions are deliberately retained to prevent replay after re-enable.
+    public func clearForGlobalDisable() -> ClearResult {
+        runtimeGeneration = nil
+        let removedCurrentID = current?.id
+        let removedPendingCount = pending.count
+        let changed = current != nil || !pending.isEmpty || paused
+        guard changed else {
+            return .init(
+                removedCurrentID: nil,
+                removedPendingCount: 0,
+                revision: revision,
+                didChange: false
+            )
+        }
+        current = nil
+        pending.removeAll(keepingCapacity: true)
+        activeIDs.removeAll(keepingCapacity: true)
+        paused = false
+        didMutate()
+        return .init(
+            removedCurrentID: removedCurrentID,
+            removedPendingCount: removedPendingCount,
+            revision: revision,
+            didChange: true
+        )
     }
 
     private var storedCount: Int { pending.count + (current == nil ? 0 : 1) }

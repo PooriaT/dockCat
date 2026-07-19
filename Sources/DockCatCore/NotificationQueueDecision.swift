@@ -105,6 +105,25 @@ public enum NotificationQueueLimitResult: Equatable, Sendable {
     }
 }
 
+public struct NotificationQueueClearResult: Equatable, Sendable {
+    public let removedCurrentID: UUID?
+    public let removedPendingCount: Int
+    public let revision: NotificationQueueRevision
+    public let didChange: Bool
+
+    public init(
+        removedCurrentID: UUID?,
+        removedPendingCount: Int,
+        revision: NotificationQueueRevision,
+        didChange: Bool
+    ) {
+        self.removedCurrentID = removedCurrentID
+        self.removedPendingCount = removedPendingCount
+        self.revision = revision
+        self.didChange = didChange
+    }
+}
+
 public enum NotificationQueueExternalLocation: Equatable, Sendable {
     case current
     case pending(index: Int)

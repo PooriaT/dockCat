@@ -10,6 +10,7 @@ DockCat is a native macOS 14+ menu-bar app that places a small animated cat besi
 - Separate click-through cat and interactive card `NSPanel` overlays
 - SpriteKit placeholder cat with callback-driven wake, carry, walk, wait, and settle animations
 - FIFO actor-backed queue with duplicate protection, limits, persistence blocking, pause/resume, and sequential delivery
+- Explicit running, delivery-paused, disabling, disabled, enabling, and shutdown lifecycle with atomic disable cleanup
 - Stable automatic/main/specific display selection using public CoreGraphics identity, with safe disconnect fallback
 - Public-API Dock edge inference for bottom, left, right, multiple displays, typed confidence, and auto-hide fallback
 - Per-display, per-Dock-edge home/presentation calibration with isolated live preview markers
@@ -41,6 +42,10 @@ Only explicit `https` action URLs are accepted. See [docs/url-scheme.md](docs/ur
 ## Structure
 
 `Sources/DockCatCore` contains platform-independent queue, state-machine, URL, and geometry logic. `Sources/DockCat` contains AppKit overlays, SpriteKit rendering, SwiftUI UI, settings, and application coordination. `Tests` contains core tests; `docs` contains design and manual-testing notes.
+
+## Runtime controls
+
+Global Disable, Pause Delivery, and Pause Visual Animations are intentionally different. Disable hides every DockCat overlay, stops external observation, cancels the active session, clears current and pending queue work, and resets pause. Re-enable starts from an empty running state and shows the sleeping cat only after placement resolves. Pause Delivery preserves the visible session, queue, and remaining transient duration while continuing to accept bounded input. Pause Visual Animations changes only visual execution; delivery, source observation, queue promotion, and transient timing continue.
 
 ## Screenshot
 

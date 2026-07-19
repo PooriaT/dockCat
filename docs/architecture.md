@@ -9,6 +9,14 @@
 - Reduced Motion uses shorter fades and avoids large frame travel for presentation/dismissal while preserving the same state-machine events and timer ordering.
 - Recovery drops only an inconsistent active DockCat item, preserves pending queue items, force-hides stale DockCat UI, resets cat visual work and state to sleeping, and attempts later pending work. Expected animation cancellation remains resumable and is not treated as corruption. Native system UI is not modified by recovery.
 
+## Runtime lifecycle
+
+`DockCatRuntimeLifecycle` is the Foundation-only transition authority. Its modes are `enabling`, `running`, `deliveryPaused`, `disabling`, `disabled`, and `shuttingDown`; transitions return typed results and rejection reasons. Shutdown is terminal, disable wins over delivery pause, pause is accepted only from running, and visual animation mode plus the System Notifications user request remain orthogonal snapshot fields. `AppState.runtimeSnapshot` is the single menu and Settings projection.
+
+Disable blocks submissions and invalidates generation before source shutdown, stops calibration and reconciliation, cancels queue claims and presentation work, resolves visual waiters, force-hides card and cat panels, atomically clears current and pending queue storage while resetting pause, clears projections and deferred external state, resets the cat machine and hidden scene to sleeping, then publishes `disabled`. The queue's recent-completion cache is retained. Repeated disable requests coalesce.
+
+Enable waits behind disable cleanup, clears and unpauses the queue, resets presentation/state projections, applies current visual preferences, resolves placement, prepares the hidden sleeping scene, shows the cat only for a valid placement, installs a new runtime generation, restores the source and reconciliation gates, publishes `running`, and only then permits claims. Saved disabled startup never shows an overlay or starts external observation. Shutdown uses the same cancellation and hiding rules without restart.
+
 ## Runtime visual preferences
 
 `EffectiveAnimationPreferences` is the Foundation-only policy boundary for every visual
@@ -46,8 +54,7 @@ No turn or walking loop is started in this mode. macOS Reduce Motion is observed
 public workspace accessibility-display notification and refreshed when the app becomes
 active; observation is injectable and stops during app shutdown.
 
-Global enable/delivery-pause lifecycle changes remain deferred to issue #82. Menu-bar
-recovery remains deferred to issue #83.
+Menu-bar-hidden recovery remains deferred to issue #83.
 
 ## Atomic notification queue ownership
 
@@ -67,6 +74,9 @@ queries with mutations.
   revision directly. Active updates carry the authoritative payload; active removals carry
   the removed item needed for ordered DockCat-card dismissal. Pending updates preserve their
   index, and pending removals cannot later be claimed.
+- `clearForGlobalDisable()` removes current and pending storage, clears active IDs, resets
+  pause, and increments the revision exactly once when any of those values changed. It is
+  idempotent and preserves the bounded recent-completion cache.
 
 Every accepted mutation increments one monotonically increasing queue revision. Rejected
 duplicates, full enqueues, missing external identities, repeated claims, unchanged pause or

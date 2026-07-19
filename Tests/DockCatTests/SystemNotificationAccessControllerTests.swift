@@ -95,6 +95,30 @@ import XCTest
         XCTAssertEqual(source.stops, 1)
     }
 
+    func testRuntimeGateStopsWithoutChangingUserPreferenceAndRestartsWithGeneration() {
+        let source = SourceFake()
+        let controller = SystemNotificationAccessController(
+            enabled: true, runtimeAllowed: false, trust: TrustFake(true), source: source
+        )
+        XCTAssertTrue(controller.userRequested)
+        XCTAssertEqual(controller.health.reason, .globallyDisabled)
+        XCTAssertEqual(source.starts, 0)
+
+        controller.setRuntimeAllowed(true)
+        let firstGeneration = source.generations.last
+        XCTAssertEqual(source.starts, 1)
+        XCTAssertEqual(firstGeneration, controller.generation)
+        controller.setRuntimeAllowed(false)
+        XCTAssertEqual(source.stops, 1)
+        XCTAssertTrue(controller.userRequested)
+        XCTAssertEqual(controller.health.reason, .globallyDisabled)
+        XCTAssertFalse(controller.acceptsCallback(generation: firstGeneration!))
+
+        controller.setRuntimeAllowed(true)
+        XCTAssertEqual(source.starts, 2)
+        XCTAssertGreaterThan(source.generations.last!, firstGeneration!)
+    }
+
     func testDelayedStartupFailureCannotOverwritePermissionRevocation() {
         let trust = TrustFake(true)
         let source = SourceFake()
@@ -116,6 +140,7 @@ import XCTest
     func requestTrust() -> Bool { requests += 1; return trusted }
 }
 @MainActor private final class SourceFake: SystemNotificationSourceControlling {
-    var starts = 0; var stops = 0; var onStart: (() -> Void)?
-    func start() { starts += 1; onStart?() }; func stop() { stops += 1 }
+    var starts = 0; var stops = 0; var generations: [UInt64] = []; var onStart: (() -> Void)?
+    func start(generation: UInt64) { starts += 1; generations.append(generation); onStart?() }
+    func stop() { stops += 1 }
 }

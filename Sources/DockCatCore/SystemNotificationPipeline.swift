@@ -56,6 +56,7 @@ public actor SystemNotificationPipeline {
     private var aliasOrder: [String] = []
     private let aliasLimit = 256
     private var pendingDismissalRequest: DismissalRequest?
+    private var runtimeGeneration: UInt64?
 
     public init(queue: NotificationQueue, ownBundleIdentifier: String,
                 parser: AccessibilityNotificationParser = .init(),
@@ -107,6 +108,77 @@ public actor SystemNotificationPipeline {
         }
     }
 
+    public func activate(runtimeGeneration: UInt64) {
+        self.runtimeGeneration = runtimeGeneration
+    }
+
+    /// Invalidates ingress before clearing source lifecycle bookkeeping. Returned tracker
+    /// removals are intentionally discarded because global disable clears the queue once.
+    public func deactivate() async {
+        runtimeGeneration = nil
+        pendingDismissalRequest = nil
+        _ = await tracker.sourceStopped()
+        observationAliases.removeAll(keepingCapacity: true)
+        aliasOrder.removeAll(keepingCapacity: true)
+    }
+
+    public func ingest(
+        _ snapshot: AccessibilityNotificationSnapshot,
+        transientDuration: TimeInterval,
+        runtimeGeneration generation: UInt64
+    ) async -> Result {
+        guard runtimeGeneration == generation else { return .notFound }
+        pendingDismissalRequest = nil
+        let candidate: AccessibilityNotificationCandidate
+        switch parser.parse(snapshot) {
+        case .failure(let rejection): return .rejected(rejection)
+        case .success(let value): candidate = value
+        }
+        if snapshot.observationKind == .destroyed {
+            let identity = identity(for: candidate, snapshot: snapshot)
+            guard case .event(let event) = await tracker.remove(identity),
+                  runtimeGeneration == generation else { return .rejected(.disappeared) }
+            removeAliases(for: identity)
+            return await apply(event, runtimeGeneration: generation)
+        }
+        if let rejection = exclusions.rejection(for: candidate) { return .rejected(rejection) }
+        let identity = identity(for: candidate, snapshot: snapshot)
+        if let observed = snapshot.observedElementIdentifier { rememberAlias(observed, identity: identity) }
+        if let token = snapshot.opaqueDismissalTokenIdentifier { rememberAlias(token, identity: identity) }
+        let classification = policy.classify(candidate)
+        let presentation: DockCatNotification.Presentation
+        let evidence: DockCatNotification.Classification
+        switch classification {
+        case .transient(let reason): presentation = .transient(duration: transientDuration); evidence = .confident(reason)
+        case .persistent(let reason): presentation = .persistent; evidence = .confident(reason)
+        case .ambiguous(let reason): presentation = .persistent; evidence = .bestEffort(reason)
+        }
+        let item = DockCatNotification(
+            sourceName: candidate.sourceDisplayName.displayValue ?? "System Notification",
+            title: candidate.title.displayValue ?? "", message: candidate.message.displayValue ?? "",
+            presentation: presentation, externalIdentity: identity, classification: evidence
+        )
+        let observation = await tracker.observe(.init(identity: identity, notification: item))
+        guard runtimeGeneration == generation else { return .notFound }
+        switch observation {
+        case .unchanged: return .duplicate
+        case .unsupportedOrdering: return .queueFull
+        case .event(let event):
+            let result = await apply(event, runtimeGeneration: generation)
+            if result.kind == .queueFull { _ = await tracker.remove(identity) }
+            if [.enqueued, .updatedCurrent, .updatedPending].contains(result),
+               let token = snapshot.opaqueDismissalTokenIdentifier {
+                pendingDismissalRequest = .init(
+                    tokenIdentifier: token,
+                    sourceBundleIdentifier: candidate.sourceBundleIdentifier,
+                    notificationSubtreePath: candidate.capture.notificationSubtreePath,
+                    stableContainerIdentifier: candidate.capture.stableContainerIdentifier
+                )
+            }
+            return result
+        }
+    }
+
     /// One-shot handoff ensures an accepted identity is attempted at most once.
     public func takeDismissalRequest() -> DismissalRequest? {
         defer { pendingDismissalRequest = nil }
@@ -121,9 +193,31 @@ public actor SystemNotificationPipeline {
         return results
     }
 
+    public func sourceStopped(runtimeGeneration generation: UInt64) async -> [Result] {
+        guard runtimeGeneration == generation else { return [] }
+        var results: [Result] = []
+        for event in await tracker.sourceStopped() {
+            guard runtimeGeneration == generation else { return results }
+            results.append(await apply(event, runtimeGeneration: generation))
+        }
+        observationAliases.removeAll(keepingCapacity: true)
+        aliasOrder.removeAll(keepingCapacity: true)
+        return results
+    }
+
     public func reconcile() async -> [Result] {
         var results: [Result] = []
         for event in await tracker.reconcile() { results.append(await apply(event)) }
+        return results
+    }
+
+    public func reconcile(runtimeGeneration generation: UInt64) async -> [Result] {
+        guard runtimeGeneration == generation else { return [] }
+        var results: [Result] = []
+        for event in await tracker.reconcile() {
+            guard runtimeGeneration == generation else { return results }
+            results.append(await apply(event, runtimeGeneration: generation))
+        }
         return results
     }
 
@@ -133,6 +227,35 @@ public actor SystemNotificationPipeline {
         case .appeared(let value): outcome = await queue.enqueueAppeared(value.notification)
         case .updated(let value): outcome = await queue.updateExternal(value.notification)
         case .disappeared(let identity): outcome = await queue.removeExternal(identity)
+        default: return .notFound
+        }
+        let kind: Result.Kind
+        switch outcome {
+        case .inserted: kind = .enqueued
+        case .updatedCurrent: kind = .updatedCurrent
+        case .updatedPending: kind = .updatedPending
+        case .unchangedCurrent, .unchangedPending, .duplicate: kind = .duplicate
+        case .removedCurrent: kind = .removedCurrent
+        case .removedPending: kind = .removedPending
+        case .full: kind = .queueFull
+        case .notFound: kind = .notFound
+        }
+        return .init(kind: kind, queueMutation: outcome)
+    }
+
+    private func apply(
+        _ event: NotificationSourceEvent,
+        runtimeGeneration generation: UInt64
+    ) async -> Result {
+        guard runtimeGeneration == generation else { return .notFound }
+        let outcome: NotificationQueue.ExternalMutationResult
+        switch event {
+        case .appeared(let value):
+            outcome = await queue.enqueueAppeared(value.notification, runtimeGeneration: generation)
+        case .updated(let value):
+            outcome = await queue.updateExternal(value.notification, runtimeGeneration: generation)
+        case .disappeared(let identity):
+            outcome = await queue.removeExternal(identity, runtimeGeneration: generation)
         default: return .notFound
         }
         let kind: Result.Kind

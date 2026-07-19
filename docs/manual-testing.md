@@ -1,5 +1,16 @@
 # Manual testing
 
+## Global lifecycle
+
+- Launch once with DockCat enabled and once with it disabled. Disabled startup must show no cat, card, or calibration preview and must not start System Notifications observation.
+- Disable while sleeping, waking, travelling out, presenting or replacing a card, waiting on transient expiry, showing a persistent card, returning home, delivery-paused, and with visual animations suppressed. Both overlays and calibration markers must disappear and remain hidden.
+- While disabled, trigger menu tests, simulator events, URL events, and external system notifications. Nothing should enter delivery or modify native system UI.
+- Re-enable and confirm the queue is empty, no prior or partially presented item replays, pause is reset, and the sleeping cat appears only after a valid placement resolves.
+- Leave the System Notifications preference enabled across disable/re-enable and confirm observation stops and restarts. Repeat with the preference disabled and confirm re-enable does not force it on.
+- Pause an active transient, wait longer than its original duration, and resume. The active overlays and queue remain in place and only the saved remaining duration runs. New bounded items may queue while paused.
+- Repeatedly invoke enable/disable and pause/resume, including during transition states, and confirm the menu and Settings always show the same authoritative mode.
+- Quit from each runtime mode and confirm no overlay, source observer, timer, animation continuation, or reconciliation task remains. Menu-bar-hidden recovery is deferred to issue #83.
+
 ## Accessibility normalization and burst deduplication
 
 1. Enable system notifications, trigger one synthetic notification, and verify multiple AX callbacks produce one DockCat card.
