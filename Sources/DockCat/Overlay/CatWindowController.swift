@@ -108,7 +108,27 @@ final class CatWindowController {
             motionWasRetargeted: motionWasRetargeted
         )
     }
-    func showSleeping() { panel.orderFrontRegardless(); scene.playLoop() }
+    var isVisible: Bool { panel.isVisible }
+
+    func showSleeping(using placement: DockPlacement) {
+        _ = updatePlacement(placement, logicalState: .home, sessionID: nil)
+        resetVisualStateWhileHidden()
+        panel.orderFrontRegardless()
+        scene.playLoop()
+    }
+
+    func hideOverlay() {
+        cancelVisualWork()
+        panel.orderOut(nil)
+    }
+
+    /// Restores the hidden scene without changing panel visibility or placement anchors.
+    func resetVisualStateWhileHidden() {
+        cancelVisualWork()
+        scene.resetToSleeping()
+        panel.setFrameOrigin(panelOrigin(forVisualAnchor: sleepingPoint))
+        panel.alphaValue = 1
+    }
 
     /// Applies scale and behavior without changing logical placement or presentation identity.
     /// The live global anchor is recovered from the old geometry before the panel is resized.
@@ -317,10 +337,7 @@ final class CatWindowController {
         scene.cancelAnimations()
     }
     func resetToSleeping() {
-        cancelVisualWork()
-        scene.resetToSleeping()
-        panel.setFrameOrigin(panelOrigin(forVisualAnchor: sleepingPoint))
-        panel.alphaValue = 1
+        resetVisualStateWhileHidden()
         panel.orderFrontRegardless()
     }
 

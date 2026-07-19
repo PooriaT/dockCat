@@ -61,6 +61,30 @@ import XCTest
 
         XCTAssertEqual(snapshots, 2)
     }
+    func testStoppedGenerationCannotDeliverAfterRestart() async {
+        let api = SourceAXFake()
+        let resolver = ResolverFake(.resolved(.init(
+            bundleIdentifier: "com.apple.notificationcenterui",
+            processIdentifier: 1,
+            localizedName: nil
+        )))
+        var deliveredGenerations: [UInt64] = []
+        let source = SystemNotificationAccessibilitySource(
+            trust: SourceTrustFake(true), resolver: resolver, client: api,
+            generatedEventHandler: { _, generation in deliveredGenerations.append(generation) },
+            outcomeHandler: { _ in }
+        )
+        source.start(generation: 41)
+        api.callback?(SourceElement(101), "AXCreated")
+        source.stop()
+        source.start(generation: 42)
+        try? await Task.sleep(for: .milliseconds(70))
+        XCTAssertTrue(deliveredGenerations.isEmpty)
+
+        api.callback?(SourceElement(202), "AXCreated")
+        try? await Task.sleep(for: .milliseconds(70))
+        XCTAssertEqual(deliveredGenerations, [42])
+    }
     private func make(_ trust: SourceTrustFake, _ resolver: ResolverFake, _ api: SourceAXFake,
                       outcome: @escaping @MainActor @Sendable (SystemNotificationAccessibilitySource.Outcome) -> Void) -> SystemNotificationAccessibilitySource {
         .init(trust: trust, resolver: resolver, client: api, eventHandler: { _ in }, outcomeHandler: outcome)

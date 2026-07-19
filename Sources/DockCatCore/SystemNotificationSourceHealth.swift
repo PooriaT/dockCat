@@ -11,6 +11,7 @@ public struct SystemNotificationSourceHealth: Sendable, Equatable {
         case startupFailed
         case processUnavailable
         case noUsefulNotifications
+        case globallyDisabled
     }
 
     public let state: State

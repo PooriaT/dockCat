@@ -3,6 +3,7 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let state = AppState()
+    private var terminationTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -17,5 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.systemNotificationAccess.refresh()
     }
 
-    func applicationWillTerminate(_ notification: Notification) { state.stop() }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard terminationTask == nil else { return .terminateLater }
+        terminationTask = Task { @MainActor [state] in
+            await state.stop()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
 }

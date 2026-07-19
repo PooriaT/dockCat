@@ -2,6 +2,12 @@ import XCTest
 @testable import DockCatCore
 
 final class SystemNotificationSourceHealthTests: XCTestCase {
+    func testGlobalDisableReasonIsDistinctFromUserDisable() {
+        XCTAssertNotEqual(
+            SystemNotificationSourceHealth(.disabled),
+            SystemNotificationSourceHealth(.disabled, reason: .globallyDisabled)
+        )
+    }
     func testSystemNotificationsPreferenceDefaultsOffAndLegacyJSONMigrates() throws {
         XCTAssertFalse(DockCatPreferences().systemNotificationsEnabled)
         let legacy = Data(#"{"enabled":false,"queueLimit":7}"#.utf8)

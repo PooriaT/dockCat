@@ -72,6 +72,17 @@ final class PresentationAnimationCancellationTests: XCTestCase {
 
         let result = await task.value
         XCTAssertEqual(result, .cancelled)
+        XCTAssertFalse(controller.isVisible)
+    }
+
+    func testHiddenCatResetNeverOrdersOverlayFront() {
+        let controller = CatWindowController()
+        XCTAssertFalse(controller.isVisible)
+
+        controller.resetVisualStateWhileHidden()
+        XCTAssertFalse(controller.isVisible)
+        controller.hideOverlay()
+        XCTAssertFalse(controller.isVisible)
     }
 
     func testCancelledTravelCannotSnapToDestination() async {

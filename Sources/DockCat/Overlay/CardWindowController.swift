@@ -155,6 +155,8 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         panel.alphaValue = 1
     }
 
+    var isVisible: Bool { panel.isVisible }
+
     func present(
         notification: DockCatNotification,
         preferences: DockCatPreferences,

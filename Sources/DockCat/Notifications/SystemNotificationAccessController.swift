@@ -4,7 +4,7 @@ import Combine
 
 @MainActor
 protocol SystemNotificationSourceControlling: AnyObject {
-    func start()
+    func start(generation: UInt64)
     func stop()
 }
 
@@ -15,30 +15,46 @@ final class SystemNotificationAccessController: ObservableObject {
     private let trust: AccessibilityTrustChecking
     private weak var source: SystemNotificationSourceControlling?
     private let logger = Logger(subsystem: "com.example.DockCat", category: "SystemNotificationSource")
-    private var enabled: Bool
+    @Published private(set) var userRequested: Bool
+    @Published private(set) var runtimeAllowed: Bool
+    private(set) var generation: UInt64 = 0
     private var startRequested = false
     private var lastTrust: Bool?
 
-    init(enabled: Bool, trust: AccessibilityTrustChecking = AccessibilityTrustController(),
+    init(enabled: Bool, runtimeAllowed: Bool = true,
+         trust: AccessibilityTrustChecking = AccessibilityTrustController(),
          source: SystemNotificationSourceControlling? = nil, startImmediately: Bool = true) {
-        self.enabled = enabled
+        self.userRequested = enabled
+        self.runtimeAllowed = runtimeAllowed
         self.trust = trust
         self.source = source
         if startImmediately { refresh() }
     }
 
     func setEnabled(_ enabled: Bool) {
-        guard self.enabled != enabled else { refresh(); return }
-        self.enabled = enabled
+        guard userRequested != enabled else { refresh(); return }
+        userRequested = enabled
         logger.info("Source \(enabled ? "enabled" : "disabled", privacy: .public)")
+        refresh()
+    }
+
+    func setRuntimeAllowed(_ allowed: Bool) {
+        guard runtimeAllowed != allowed else { refresh(); return }
+        runtimeAllowed = allowed
+        logger.info("Source runtimeAllowed=\(allowed, privacy: .public)")
         refresh()
     }
 
     /// Passive refresh: this API never supplies the Accessibility prompt option.
     func refresh() {
-        guard enabled else {
+        guard userRequested else {
             stopSource()
             transition(to: .init(.disabled))
+            return
+        }
+        guard runtimeAllowed else {
+            stopSource()
+            transition(to: .init(.disabled, reason: .globallyDisabled))
             return
         }
         let trusted = trust.isTrusted()
@@ -55,15 +71,16 @@ final class SystemNotificationAccessController: ObservableObject {
             return
         }
         guard !startRequested else { return }
+        generation &+= 1
         startRequested = true
         transition(to: .init(.starting))
-        logger.info("Source start requested")
-        source.start()
+        logger.info("Source start requested generation=\(self.generation, privacy: .public)")
+        source.start(generation: generation)
     }
 
     /// The only path that invokes the prompting system API.
     func requestPermission() {
-        guard enabled else { return }
+        guard userRequested else { return }
         logger.info("Accessibility permission request initiated")
         _ = trust.requestTrust()
         refresh()
@@ -89,15 +106,22 @@ final class SystemNotificationAccessController: ObservableObject {
     }
     func shutdown() { stopSource() }
 
+    func acceptsCallback(generation: UInt64) -> Bool {
+        acceptsSourceCallback && generation == self.generation
+    }
+
     private func stopSource() {
         guard startRequested else { return }
         startRequested = false
-        logger.info("Source stop requested")
+        generation &+= 1
+        logger.info("Source stop requested generation=\(self.generation, privacy: .public)")
         source?.stop()
     }
 
     /// Reject callbacks from a source generation that has already been stopped.
-    private var acceptsSourceCallback: Bool { enabled && lastTrust == true && startRequested }
+    private var acceptsSourceCallback: Bool {
+        userRequested && runtimeAllowed && lastTrust == true && startRequested
+    }
 
     private func transition(to newHealth: SystemNotificationSourceHealth) {
         guard health != newHealth else { return }

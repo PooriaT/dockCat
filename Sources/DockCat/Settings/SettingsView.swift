@@ -10,11 +10,18 @@ struct SettingsView: View {
         TabView(selection: $tab) {
             Form {
                 Toggle("Enable DockCat", isOn: Binding(
-                    get: { state.settings.preferences.enabled },
+                    get: { state.runtimeMode.isEnabled },
                     set: { state.setDockCatEnabled($0) }
                 ))
-                Toggle("Pause DockCat", isOn: Binding(get: { state.isPaused }, set: { state.setPaused($0) }))
-                    .disabled(state.isPauseTransitioning)
+                .disabled(state.runtimeMode.isTransitioning || state.runtimeMode == .shuttingDown)
+                LabeledContent("Runtime", value: runtimeTitle)
+                Toggle("Pause notification delivery", isOn: Binding(
+                    get: { state.runtimeMode == .deliveryPaused },
+                    set: { state.setPaused($0) }
+                ))
+                    .disabled(!state.canMutatePause)
+                Text("Delivery pause preserves the active notification and queue. Disabling clears all delivery work and hides overlays.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Show menu-bar icon", isOn: $menuBarVisible)
                 Toggle("Launch at login", isOn: Binding(get: { state.settings.launchAtLogin }, set: { enabled in state.settings.setLaunchAtLogin(enabled) }))
                 if let error = state.settings.loginItemError { Text(error).foregroundStyle(.red).font(.caption) }
@@ -92,7 +99,7 @@ struct SettingsView: View {
                             Button("Stop Preview") { state.stopCalibrationPreview() }
                         } else {
                             Button("Start Preview") { state.startCalibrationPreview() }
-                                .disabled(!canCalibrate || !state.settings.preferences.enabled)
+                                .disabled(!canCalibrate || !state.runtimeMode.acceptsSubmissions)
                         }
                     }
                 }
@@ -140,6 +147,17 @@ struct SettingsView: View {
     }
     private func binding<T>(_ keyPath: WritableKeyPath<DockCatPreferences, T>) -> Binding<T> {
         Binding(get: { state.settings.preferences[keyPath: keyPath] }, set: { state.settings.preferences[keyPath: keyPath] = $0 })
+    }
+
+    private var runtimeTitle: String {
+        switch state.runtimeMode {
+        case .enabling: "Enabling"
+        case .running: "Running"
+        case .deliveryPaused: "Delivery paused"
+        case .disabling: "Disabling"
+        case .disabled: "Disabled"
+        case .shuttingDown: "Shutting down"
+        }
     }
 
     private func placementBinding<T>(
@@ -346,7 +364,8 @@ private struct SystemNotificationsSettingsView: View {
         case .startupFailed: "The source could not start and may be retried."
         case .processUnavailable: "Notification Center is not currently available and will be retried."
         case .noUsefulNotifications: "No compatible notification events were available."
-        case nil: access.health.state == .disabled ? "This setting is independent from Enable DockCat." : "Source lifecycle status."
+        case .globallyDisabled: "Your System Notifications preference is preserved, but observation is stopped while DockCat is globally disabled."
+        case nil: access.health.state == .disabled ? "Disabled by your System Notifications preference." : "Source lifecycle status."
         }
     }
 
