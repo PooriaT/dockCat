@@ -15,5 +15,7 @@ final class URLSchemeParserTests: XCTestCase {
         XCTAssertThrowsError(try parser.parse(URL(string: "dockcat://notify?title=x&duration=999")!))
         XCTAssertThrowsError(try parser.parse(URL(string: "dockcat://notify?title=x&action=file:///tmp/x")!))
         XCTAssertThrowsError(try parser.parse(URL(string: "dockcat://notify?title=\(String(repeating: "x", count: 121))")!))
+        XCTAssertThrowsError(try parser.parse(URL(string: "dockcat://notify?title=x&unknown=y")!))
+        XCTAssertThrowsError(try parser.parse(URL(string: "dockcat://notify?title=x&title=y")!))
     }
 }

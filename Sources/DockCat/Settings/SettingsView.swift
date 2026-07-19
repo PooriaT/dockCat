@@ -4,8 +4,10 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var state: AppState
+    @ObservedObject var menuBarVisibility: MenuBarVisibilityController
+    let settingsPresenter: SettingsWindowPresenter
     @State private var tab = 0
-    @AppStorage("DockCat.menuBarVisible") private var menuBarVisible = true
+
     var body: some View {
         TabView(selection: $tab) {
             Form {
@@ -22,7 +24,11 @@ struct SettingsView: View {
                     .disabled(!state.canMutatePause)
                 Text("Delivery pause preserves the active notification and queue. Disabling clears all delivery work and hides overlays.")
                     .font(.caption).foregroundStyle(.secondary)
-                Toggle("Show menu-bar icon", isOn: $menuBarVisible)
+                Toggle("Show menu-bar icon", isOn: Binding(
+                    get: { menuBarVisibility.isVisible },
+                    set: { menuBarVisibility.requestVisibility($0) }
+                ))
+                .disabled(menuBarVisibility.isChanging)
                 Toggle("Launch at login", isOn: Binding(get: { state.settings.launchAtLogin }, set: { enabled in state.settings.setLaunchAtLogin(enabled) }))
                 if let error = state.settings.loginItemError { Text(error).foregroundStyle(.red).font(.caption) }
             }.padding().tabItem { Label("General", systemImage: "gear") }.tag(0)
@@ -144,7 +150,46 @@ struct SettingsView: View {
         }
         .frame(width: 600, height: 580)
         .onDisappear { state.stopCalibrationPreview() }
+        .alert(
+            "Hide DockCat’s Menu Item?",
+            isPresented: Binding(
+                get: { menuBarVisibility.isHideConfirmationPending },
+                set: { if !$0 { menuBarVisibility.cancelHide() } }
+            )
+        ) {
+            Button("Copy Recovery Command") {
+                copyRecoveryCommand()
+                menuBarVisibility.cancelHide()
+            }
+            Button("Cancel", role: .cancel) { menuBarVisibility.cancelHide() }
+            Button("Hide Menu Item", role: .destructive) { menuBarVisibility.confirmHide() }
+        } message: {
+            Text("DockCat is an accessory app and has no normal Dock icon. Hiding this item does not pause notifications or disable DockCat. Reopen Settings with dockcat://settings, or restore the paw with the recovery command.")
+        }
+        .alert(
+            "Menu Item Cannot Be Hidden",
+            isPresented: Binding(
+                get: { menuBarVisibility.recoveryConfigurationError != nil },
+                set: { if !$0 { menuBarVisibility.dismissRecoveryConfigurationError() } }
+            )
+        ) {
+            Button("Open Settings", role: .cancel) {
+                settingsPresenter.present(source: .hideConfirmationHelp)
+                menuBarVisibility.dismissRecoveryConfigurationError()
+            }
+        } message: {
+            Text(menuBarVisibility.recoveryConfigurationError?.userMessage ?? "Recovery is unavailable in this app build.")
+        }
     }
+
+    private func copyRecoveryCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(
+            MenuBarVisibilityController.recoveryCommand,
+            forType: .string
+        )
+    }
+
     private func binding<T>(_ keyPath: WritableKeyPath<DockCatPreferences, T>) -> Binding<T> {
         Binding(get: { state.settings.preferences[keyPath: keyPath] }, set: { state.settings.preferences[keyPath: keyPath] = $0 })
     }
