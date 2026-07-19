@@ -82,6 +82,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     private var currentOperationID: OperationID?
     private var currentVisualOperation: VisualOperation?
     private var currentOperationUsesReducedMotion = false
+    private var visualPreferences: EffectiveAnimationPreferences = .default
     private var dismissalSourceRect: CGRect?
     private var pendingAnimation: PendingAnimation?
     private var suppressCloseCallback = false
@@ -137,6 +138,15 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         dismissalSourceRect = nil
     }
 
+    func applyVisualPreferences(_ preferences: EffectiveAnimationPreferences) {
+        let modeChanged = visualPreferences.mode != preferences.mode
+        visualPreferences = preferences
+        currentOperationUsesReducedMotion = preferences.mode != .full
+        if modeChanged, pendingAnimation != nil {
+            completeCurrentVisualOperationImmediately()
+        }
+    }
+
     func forceHide() {
         cancelPresentationAnimation()
         suppressCloseCallback = true
@@ -149,9 +159,12 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         notification: DockCatNotification,
         preferences: DockCatPreferences,
         from sourceRect: CGRect,
-        reducedMotion: Bool,
+        visualPreferences: EffectiveAnimationPreferences,
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
+        self.visualPreferences = visualPreferences
+        let reducedMotion = visualPreferences.mode == .reducedMotion
+            || visualPreferences.mode == .walkingDisabled
         let id = beginOperation(
             sessionID: sessionID, operation: .presenting,
             reducedMotion: reducedMotion
@@ -164,6 +177,13 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         panel.alphaValue = 0
         panel.setFrame(startFrame, display: true)
         panel.orderFrontRegardless()
+        if visualPreferences.mode == .animationsPaused {
+            panel.setFrame(finalFrame, display: true)
+            panel.alphaValue = 1
+            currentOperationID = nil
+            currentVisualOperation = nil
+            return .completed
+        }
         return await animate(id: id, duration: reducedMotion ? 0.12 : 0.22) { [panel] in
             panel.animator().alphaValue = 1
             panel.animator().setFrame(finalFrame, display: true)
@@ -177,16 +197,36 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    func replace(
+    func present(
         notification: DockCatNotification,
         preferences: DockCatPreferences,
+        from sourceRect: CGRect,
         reducedMotion: Bool,
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
+        await present(
+            notification: notification,
+            preferences: preferences,
+            from: sourceRect,
+            visualPreferences: Self.legacyPolicy(reducedMotion: reducedMotion),
+            sessionID: sessionID
+        )
+    }
+
+    func replace(
+        notification: DockCatNotification,
+        preferences: DockCatPreferences,
+        visualPreferences: EffectiveAnimationPreferences,
+        sessionID: PresentationSessionID
+    ) async -> PresentationAnimationResult {
+        self.visualPreferences = visualPreferences
+        let reducedMotion = visualPreferences.mode == .reducedMotion
+            || visualPreferences.mode == .walkingDisabled
         guard panel.isVisible else {
             return await present(
                 notification: notification, preferences: preferences,
-                from: stableCardFrame ?? .zero, reducedMotion: reducedMotion,
+                from: stableCardFrame ?? .zero,
+                visualPreferences: visualPreferences,
                 sessionID: sessionID
             )
         }
@@ -194,6 +234,15 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             sessionID: sessionID, operation: .replacing,
             reducedMotion: reducedMotion
         )
+        if visualPreferences.mode == .animationsPaused {
+            install(notification: notification, preferences: preferences)
+            applyStableFrame()
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            currentOperationID = nil
+            currentVisualOperation = nil
+            return .completed
+        }
         let fadeOut = await animate(id: id, duration: reducedMotion ? 0.10 : 0.16) { [panel] in
             panel.animator().alphaValue = 0.15
         } cancel: { [panel] in
@@ -218,11 +267,28 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    func dismissActive(
-        toward sourceRect: CGRect?,
+    func replace(
+        notification: DockCatNotification,
+        preferences: DockCatPreferences,
         reducedMotion: Bool,
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
+        await replace(
+            notification: notification,
+            preferences: preferences,
+            visualPreferences: Self.legacyPolicy(reducedMotion: reducedMotion),
+            sessionID: sessionID
+        )
+    }
+
+    func dismissActive(
+        toward sourceRect: CGRect?,
+        visualPreferences: EffectiveAnimationPreferences,
+        sessionID: PresentationSessionID
+    ) async -> PresentationAnimationResult {
+        self.visualPreferences = visualPreferences
+        let reducedMotion = visualPreferences.mode == .reducedMotion
+            || visualPreferences.mode == .walkingDisabled
         let id = beginOperation(
             sessionID: sessionID, operation: .dismissing,
             reducedMotion: reducedMotion
@@ -232,6 +298,17 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         let targetFrame = (reducedMotion || sourceRect == nil)
             ? currentFrame
             : handoffFrame(from: sourceRect!, cardFrame: currentFrame)
+        if visualPreferences.mode == .animationsPaused {
+            suppressCloseCallback = true
+            panel.orderOut(nil)
+            suppressCloseCallback = false
+            applyStableFrame()
+            panel.alphaValue = 1
+            currentOperationID = nil
+            currentVisualOperation = nil
+            dismissalSourceRect = nil
+            return .completed
+        }
         return await animate(id: id, duration: reducedMotion ? 0.12 : 0.20) { [panel] in
             panel.animator().alphaValue = 0
             panel.animator().setFrame(targetFrame, display: true)
@@ -246,6 +323,32 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             self?.applyStableFrame()
             panel.alphaValue = 1
         }
+    }
+
+    func dismissActive(
+        toward sourceRect: CGRect?,
+        reducedMotion: Bool,
+        sessionID: PresentationSessionID
+    ) async -> PresentationAnimationResult {
+        await dismissActive(
+            toward: sourceRect,
+            visualPreferences: Self.legacyPolicy(reducedMotion: reducedMotion),
+            sessionID: sessionID
+        )
+    }
+
+    private static func legacyPolicy(
+        reducedMotion: Bool
+    ) -> EffectiveAnimationPreferences {
+        EffectiveAnimationPreferences(inputs: .init(
+            appReducedMotion: reducedMotion,
+            systemReducedMotion: false,
+            disableWalking: false,
+            pauseAnimations: false,
+            idleAnimation: true,
+            animationSpeed: 1,
+            catScale: 1
+        ))
     }
 
     private func install(
@@ -410,6 +513,30 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         pendingAnimation = nil
         if result == .cancelled { pending.cancel() }
         pending.continuation.resume(returning: result)
+    }
+
+    private func completeCurrentVisualOperationImmediately() {
+        guard let pending = pendingAnimation,
+              pending.id == currentOperationID,
+              let operation = currentVisualOperation else { return }
+        pendingAnimation = nil
+        panel.contentView?.layer?.removeAllAnimations()
+        switch operation {
+        case .presenting, .replacing:
+            applyStableFrame()
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+        case .dismissing:
+            suppressCloseCallback = true
+            panel.orderOut(nil)
+            suppressCloseCallback = false
+            applyStableFrame()
+            panel.alphaValue = 1
+        }
+        currentOperationID = nil
+        currentVisualOperation = nil
+        dismissalSourceRect = nil
+        pending.continuation.resume(returning: .completed)
     }
 
     private func rebaseCurrentVisualOperation(animated: Bool) {

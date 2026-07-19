@@ -8,7 +8,7 @@ final class PresentationAnimationCancellationTests: XCTestCase {
     func testCancelledSpriteActionResolvesItsWaiter() async {
         let scene = CatScene(size: CGSize(width: 150, height: 110))
         let task = Task {
-            await scene.runAsync(.wake, duration: 30, reducedMotion: false)
+            await scene.runAsync(.wake, duration: 30, preferences: .default)
         }
         await Task.yield()
         task.cancel()
@@ -20,11 +20,11 @@ final class PresentationAnimationCancellationTests: XCTestCase {
     func testReplacingSpriteActionCancelsOldWaiter() async {
         let scene = CatScene(size: CGSize(width: 150, height: 110))
         let old = Task {
-            await scene.runAsync(.wake, duration: 30, reducedMotion: false)
+            await scene.runAsync(.wake, duration: 30, preferences: .default)
         }
         await Task.yield()
         let replacement = Task {
-            await scene.runAsync(.wake, duration: 30, reducedMotion: false)
+            await scene.runAsync(.wake, duration: 30, preferences: .default)
         }
 
         let oldResult = await old.value
@@ -83,8 +83,7 @@ final class PresentationAnimationCancellationTests: XCTestCase {
             await driver.move(
                 to: destination,
                 dockEdge: .bottom,
-                speed: 0.25,
-                reducedMotion: false,
+                preferences: policy(speed: 0.25),
                 presentationSessionID: presentationID
             )
         }
@@ -103,16 +102,18 @@ final class PresentationAnimationCancellationTests: XCTestCase {
         let oldDestination = CGPoint(x: 10_000, y: 0)
         let old = Task {
             await driver.move(
-                to: oldDestination, dockEdge: .bottom, speed: 0.25,
-                reducedMotion: false, presentationSessionID: presentationID
+                to: oldDestination, dockEdge: .bottom,
+                preferences: policy(speed: 0.25),
+                presentationSessionID: presentationID
             )
         }
         await Task.yield()
         let newDestination = CGPoint(x: 120, y: 0)
         let replacement = Task {
             await driver.move(
-                to: newDestination, dockEdge: .bottom, speed: 4,
-                reducedMotion: false, presentationSessionID: presentationID
+                to: newDestination, dockEdge: .bottom,
+                preferences: policy(speed: 4),
+                presentationSessionID: presentationID
             )
         }
 
@@ -123,6 +124,23 @@ final class PresentationAnimationCancellationTests: XCTestCase {
         XCTAssertEqual(panel.frameOrigin, newDestination)
         XCTAssertNotEqual(panel.frameOrigin, oldDestination)
     }
+}
+
+private func policy(
+    mode: VisualAnimationMode = .full,
+    speed: Double = 1,
+    scale: Double = 1,
+    idle: Bool = true
+) -> EffectiveAnimationPreferences {
+    EffectiveAnimationPreferences(inputs: .init(
+        appReducedMotion: mode == .reducedMotion,
+        systemReducedMotion: false,
+        disableWalking: mode == .walkingDisabled,
+        pauseAnimations: mode == .animationsPaused,
+        idleAnimation: idle,
+        animationSpeed: speed,
+        catScale: scale
+    ))
 }
 
 @MainActor

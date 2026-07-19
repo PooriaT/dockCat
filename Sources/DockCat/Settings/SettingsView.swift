@@ -21,7 +21,7 @@ struct SettingsView: View {
             }.padding().tabItem { Label("General", systemImage: "gear") }.tag(0)
             Form {
                 Section("Placement") {
-                    Picker("Display", selection: binding(\.displaySelection)) {
+                    Picker("Display", selection: placementBinding(\.displaySelection)) {
                         Text("Automatic (stable)").tag(DisplaySelection.automatic)
                         Text("Main display").tag(DisplaySelection.main)
                         ForEach(state.displayCatalog.descriptors, id: \.identity) { display in
@@ -50,18 +50,21 @@ struct SettingsView: View {
                             ).foregroundStyle(.orange)
                         }
                     }
-                    Picker("Sleeping corner", selection: binding(\.sleepingCorner)) {
+                    Picker("Sleeping corner", selection: placementBinding(\.sleepingCorner)) {
                         Text("Start of Dock").tag(DockCatPreferences.SleepingCorner.start)
                         Text("End of Dock").tag(DockCatPreferences.SleepingCorner.end)
                     }
                     LabeledContent("Distance from Dock") {
-                        Slider(value: binding(\.positionOffset), in: -20...80).frame(width: 220)
+                        Slider(value: placementBinding(\.positionOffset), in: -20...80).frame(width: 220)
                     }
                     LabeledContent("Trash-side adjustment") {
-                        Slider(value: binding(\.dockEndOffset), in: -300...300).frame(width: 220)
+                        Slider(value: placementBinding(\.dockEndOffset), in: -300...300).frame(width: 220)
                     }
-                    Slider(value: binding(\.cardOffset), in: 0...100) { Text("Card offset") }
-                    Slider(value: binding(\.catScale), in: 0.5...2) { Text("Cat scale") }
+                    Slider(value: placementBinding(\.cardOffset), in: 0...100) { Text("Card offset") }
+                    Slider(value: Binding(
+                        get: { state.settings.preferences.catScale },
+                        set: { state.setCatScale($0) }
+                    ), in: 0.5...2) { Text("Cat scale") }
                 }
 
                 Section("Dock anchor calibration") {
@@ -79,7 +82,10 @@ struct SettingsView: View {
                     HStack {
                         Button("Reset Current") { resetCurrentCalibration() }
                             .disabled(!canCalibrate)
-                        Button("Reset All") { state.settings.preferences.resetAllCalibrations() }
+                        Button("Reset All") {
+                            state.settings.preferences.resetAllCalibrations()
+                            state.refreshPlacement()
+                        }
                             .disabled(state.settings.preferences.dockCalibrations.isEmpty)
                         Spacer()
                         if state.isCalibrationPreviewActive {
@@ -103,19 +109,49 @@ struct SettingsView: View {
                 .tabItem { Label("System", systemImage: "bell.badge") }
                 .tag(3)
             Form {
-                Slider(value: binding(\.animationSpeed), in: 0.25...3) { Text("Animation speed") }
-                Toggle("Reduced motion", isOn: binding(\.reducedMotion))
-                Toggle("Disable walking", isOn: binding(\.disableWalking))
-                Toggle("Idle breathing", isOn: binding(\.idleAnimation))
+                Slider(value: Binding(
+                    get: { state.settings.preferences.animationSpeed },
+                    set: { state.setAnimationSpeed($0) }
+                ), in: 0.25...3) { Text("Animation speed") }
+                Toggle("Reduced motion", isOn: Binding(
+                    get: { state.settings.preferences.reducedMotion },
+                    set: { state.setAppReducedMotion($0) }
+                ))
+                Toggle("Disable walking", isOn: Binding(
+                    get: { state.settings.preferences.disableWalking },
+                    set: { state.setDisableWalking($0) }
+                ))
+                Toggle("Idle breathing", isOn: Binding(
+                    get: { state.settings.preferences.idleAnimation },
+                    set: { state.setIdleAnimation($0) }
+                ))
+                Toggle("Pause visual animations", isOn: Binding(
+                    get: { state.settings.preferences.pauseAnimations },
+                    set: { state.setPauseAnimations($0) }
+                ))
+                Text("Notifications continue to be delivered; visual transitions complete immediately.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }.padding().tabItem { Label("Animation", systemImage: "figure.walk") }.tag(4)
             NotificationSimulatorView(state: state).padding().tabItem { Label("Developer", systemImage: "hammer") }.tag(5)
         }
         .frame(width: 600, height: 580)
-        .onChange(of: state.settings.preferences) { _, _ in state.refreshPlacement() }
         .onDisappear { state.stopCalibrationPreview() }
     }
     private func binding<T>(_ keyPath: WritableKeyPath<DockCatPreferences, T>) -> Binding<T> {
         Binding(get: { state.settings.preferences[keyPath: keyPath] }, set: { state.settings.preferences[keyPath: keyPath] = $0 })
+    }
+
+    private func placementBinding<T>(
+        _ keyPath: WritableKeyPath<DockCatPreferences, T>
+    ) -> Binding<T> {
+        Binding(
+            get: { state.settings.preferences[keyPath: keyPath] },
+            set: {
+                state.settings.preferences[keyPath: keyPath] = $0
+                state.refreshPlacement()
+            }
+        )
     }
 
     private enum CalibrationAnchor { case home, presentation }
@@ -192,6 +228,7 @@ struct SettingsView: View {
                 state.settings.preferences.setCalibration(
                     calibration, for: placement.displayIdentity, edge: placement.edge
                 )
+                state.refreshPlacement()
             }
         )
     }
@@ -202,6 +239,7 @@ struct SettingsView: View {
         state.settings.preferences.resetCalibration(
             for: placement.displayIdentity, edge: placement.edge
         )
+        state.refreshPlacement()
     }
 }
 

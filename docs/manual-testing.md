@@ -42,6 +42,31 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 
 - Enable Reduce Motion and confirm presentation uses fade-in, dismissal uses fade-out, queued replacement uses crossfade, and logical ordering is unchanged.
 
+## Runtime animation and accessibility settings
+
+- Drag Cat scale from 0.5 to 2.0 while sleeping, during outbound/return travel, and with a
+  persistent card visible. Repeat with bottom, left, and right Docks and a negative-coordinate
+  secondary display. Confirm the Dock anchor does not drift, vector art is not clipped, and the
+  card remains separated from the scaled exclusion frame.
+- Disable Idle breathing while sleeping and confirm the pose becomes static immediately.
+  Re-enable it and confirm exactly one breathing loop. Toggle it during delivery and confirm
+  active choreography is not disrupted and the next sleeping pose uses the newest value.
+- Enable Disable walking and send transient and persistent notifications. Confirm wake and
+  pickup remain animated, the mini-card remains visible, both travel directions use a short
+  fade relocation, and no turn/walk loop or continuous Dock traversal occurs.
+- Enable Pause visual animations during wake, travel, card presentation, waiting, card
+  dismissal, return, and settlement. Confirm each visual reaches a valid final state, delivery
+  continues, the transient countdown is neither paused nor restarted, and later queued
+  notifications still present. Disable it and confirm skipped animations are not replayed.
+- Toggle app Reduced Motion and macOS Reduce Motion while a visual operation is active.
+  Confirm the effective mode changes without relaunch, the same notification/session remains
+  authoritative, and transient remaining time and queue order are unchanged.
+- Compare Pause visual animations with Pause DockCat: the former skips only visuals while the
+  latter pauses delivery and preserves transient remaining time.
+- Inspect visual diagnostics. They may contain only effective mode, app/system Reduced Motion,
+  idle state, clamped scale, overlay dimensions, rebase state, and no-walking use—never
+  notification content or display serial values.
+
 ## Cancellation
 
 - Pause, disable, stop, or otherwise cancel during card presentation and confirm stale animation completion does not show, dismiss, or overwrite a later notification.
