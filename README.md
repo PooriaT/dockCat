@@ -14,7 +14,7 @@ DockCat is a native macOS 14+ menu-bar app that places a small animated cat besi
 - Public-API Dock edge inference for bottom, left, right, multiple displays, typed confidence, and auto-hide fallback
 - Per-display, per-Dock-edge home/presentation calibration with isolated live preview markers
 - Internal/test and validated `dockcat://notify` sources
-- Reduced-motion behavior, ServiceManagement login item support, structured logging, and XCTest coverage
+- Live app/system Reduced Motion, distinct no-walking and pause-visual modes, scalable anchored cat geometry, idle-breathing control, ServiceManagement login item support, structured logging, and XCTest coverage
 
 DockCat does not currently mirror other apps' notifications. Settings includes a disabled-by-default, experimental System Notifications permission-onboarding control for a future observer. Accessibility permission is requested only after the user presses the request button; no observer or Accessibility-tree parsing exists yet. DockCat continues to avoid private APIs, injection, OCR, screen scraping, and direct Notification Center database access.
 

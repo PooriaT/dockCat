@@ -8,10 +8,18 @@ final class SettingsStore: ObservableObject {
     @Published var preferences: DockCatPreferences { didSet { save() } }
     @Published private(set) var loginItemError: String?
     private let key = "DockCat.preferences.v1"
+    let accessibilityDisplayOptions: AccessibilityDisplayOptionsMonitor
 
-    init() {
+    init(
+        accessibilityDisplayOptions: AccessibilityDisplayOptionsMonitor = .init()
+    ) {
+        self.accessibilityDisplayOptions = accessibilityDisplayOptions
         if let data = UserDefaults.standard.data(forKey: key),
-           let value = try? JSONDecoder().decode(DockCatPreferences.self, from: data) {
+           var value = try? JSONDecoder().decode(DockCatPreferences.self, from: data) {
+            value.animationSpeed = EffectiveAnimationPreferences.clampedSpeed(
+                value.animationSpeed
+            )
+            value.catScale = EffectiveAnimationPreferences.clampedCatScale(value.catScale)
             preferences = value
             // Persist a successfully decoded legacy payload through the new encoder.
             save()
@@ -19,7 +27,20 @@ final class SettingsStore: ObservableObject {
             preferences = DockCatPreferences()
         }
     }
-    var effectiveReducedMotion: Bool { preferences.reducedMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || preferences.disableWalking }
+    var effectiveReducedMotion: Bool {
+        preferences.reducedMotion || accessibilityDisplayOptions.reduceMotion
+    }
+    var effectiveAnimationPreferences: EffectiveAnimationPreferences {
+        EffectiveAnimationPreferences(inputs: .init(
+            appReducedMotion: preferences.reducedMotion,
+            systemReducedMotion: accessibilityDisplayOptions.reduceMotion,
+            disableWalking: preferences.disableWalking,
+            pauseAnimations: preferences.pauseAnimations,
+            idleAnimation: preferences.idleAnimation,
+            animationSpeed: preferences.animationSpeed,
+            catScale: preferences.catScale
+        ))
+    }
     var launchAtLogin: Bool { SMAppService.mainApp.status == .enabled }
     func setLaunchAtLogin(_ enabled: Bool) {
         do { enabled ? try SMAppService.mainApp.register() : try SMAppService.mainApp.unregister(); loginItemError = nil }

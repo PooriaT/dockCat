@@ -23,6 +23,7 @@ final class AppState: ObservableObject {
     @Published private(set) var currentPlacement: DockPlacement?
     @Published private var isPlacementCurrentlyResolved = false
     @Published private(set) var isCalibrationPreviewActive = false
+    @Published private(set) var effectiveAnimationPreferences: EffectiveAnimationPreferences = .default
     let settings = SettingsStore()
     let displayCatalog = DisplayCatalog()
     private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
@@ -78,11 +79,17 @@ final class AppState: ObservableObject {
     private var deferredExternalDisappearance: DeferredExternalRemoval?
     private var dismissingNotification: DockCatNotification?
     private var placementRefreshTask: Task<Void, Never>?
+    private var visualPreferenceRefreshTask: Task<Void, Never>?
     private var placementRevision: UInt64 = 0
     private var lastValidPlacement: DockPlacement?
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
 
     func start() {
+        settings.accessibilityDisplayOptions.onChange = { [weak self] _ in
+            self?.scheduleVisualPreferenceRefresh()
+        }
+        settings.accessibilityDisplayOptions.start()
+        applyNewestVisualPreferences()
         systemNotificationAccess.refresh()
         applyNewestPlacement()
         cardWindow.onDismiss = { [weak self] in self?.dismissCurrent() }
@@ -113,6 +120,9 @@ final class AppState: ObservableObject {
         lifecycleReconciliationTask = nil
         placementRefreshTask?.cancel()
         placementRefreshTask = nil
+        visualPreferenceRefreshTask?.cancel()
+        visualPreferenceRefreshTask = nil
+        settings.accessibilityDisplayOptions.stop()
         cardWindow.forceHide()
         catWindow.cancelVisualWork()
         stopCalibrationPreview()
@@ -403,6 +413,60 @@ final class AppState: ObservableObject {
 
     func refreshPlacement() { reposition() }
 
+    func setCatScale(_ value: Double) {
+        settings.preferences.catScale = EffectiveAnimationPreferences.clampedCatScale(value)
+        scheduleVisualPreferenceRefresh()
+    }
+
+    func setIdleAnimation(_ enabled: Bool) {
+        settings.preferences.idleAnimation = enabled
+        scheduleVisualPreferenceRefresh()
+    }
+
+    func setDisableWalking(_ disabled: Bool) {
+        settings.preferences.disableWalking = disabled
+        scheduleVisualPreferenceRefresh()
+    }
+
+    func setPauseAnimations(_ paused: Bool) {
+        settings.preferences.pauseAnimations = paused
+        scheduleVisualPreferenceRefresh()
+    }
+
+    func setAppReducedMotion(_ reduced: Bool) {
+        settings.preferences.reducedMotion = reduced
+        scheduleVisualPreferenceRefresh()
+    }
+
+    func setAnimationSpeed(_ speed: Double) {
+        settings.preferences.animationSpeed = EffectiveAnimationPreferences.clampedSpeed(speed)
+        scheduleVisualPreferenceRefresh()
+    }
+
+    /// Coalesces rapid slider ticks while persisting every newest value before runtime use.
+    private func scheduleVisualPreferenceRefresh() {
+        guard visualPreferenceRefreshTask == nil else { return }
+        visualPreferenceRefreshTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, !Task.isCancelled else { return }
+            self.visualPreferenceRefreshTask = nil
+            self.applyNewestVisualPreferences()
+        }
+    }
+
+    private func applyNewestVisualPreferences() {
+        let previous = effectiveAnimationPreferences
+        let newest = settings.effectiveAnimationPreferences
+        effectiveAnimationPreferences = newest
+        let geometryChanged = catWindow.applyVisualPreferences(newest)
+        cardWindow.applyVisualPreferences(newest)
+        if geometryChanged { reposition() }
+        guard previous != newest else { return }
+        logger.info(
+            "Visual preferences mode=\(newest.mode.rawValue, privacy: .public) appReduced=\(newest.appReducedMotion, privacy: .public) systemReduced=\(newest.systemReducedMotion, privacy: .public) idle=\(newest.idleAnimationEnabled, privacy: .public) scale=\(newest.catScale, privacy: .public) overlayWidth=\(CatOverlayGeometry(scale: newest.catScale).panelSize.width, privacy: .public) overlayHeight=\(CatOverlayGeometry(scale: newest.catScale).panelSize.height, privacy: .public) rebased=\(geometryChanged, privacy: .public)"
+        )
+    }
+
     var isCalibrationAvailable: Bool {
         isPlacementCurrentlyResolved
             && currentPlacement?.requestedDisplayAvailable == true
@@ -613,7 +677,7 @@ final class AppState: ObservableObject {
                 notification: item,
                 preferences: settings.preferences,
                 from: catWindow.handoffSourceRect(),
-                reducedMotion: settings.effectiveReducedMotion,
+                visualPreferences: effectiveAnimationPreferences,
                 sessionID: sessionID
             )
             guard PresentationChoreography.shouldAcceptPresentationCompletion(result),
@@ -637,7 +701,7 @@ final class AppState: ObservableObject {
             let result = await cardWindow.replace(
                 notification: item,
                 preferences: settings.preferences,
-                reducedMotion: settings.effectiveReducedMotion,
+                visualPreferences: effectiveAnimationPreferences,
                 sessionID: sessionID
             )
             guard result == .completed, !Task.isCancelled,
@@ -655,7 +719,7 @@ final class AppState: ObservableObject {
                   presentation.beginPhase(.dismissingCard, for: sessionID) else { return failClosed(effect) }
             let result = await cardWindow.dismissActive(
                 toward: catWindow.handoffSourceRect(),
-                reducedMotion: settings.effectiveReducedMotion,
+                visualPreferences: effectiveAnimationPreferences,
                 sessionID: sessionID
             )
             guard result == .completed, !Task.isCancelled,
@@ -689,8 +753,7 @@ final class AppState: ObservableObject {
         let notificationID = current?.id ?? dismissingNotification?.id
         let result = await catWindow.animate(
             animation,
-            speed: settings.preferences.animationSpeed,
-            reducedMotion: settings.effectiveReducedMotion,
+            preferences: effectiveAnimationPreferences,
             sessionID: sessionID
         )
         guard result == .completed, !Task.isCancelled,
