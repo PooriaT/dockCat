@@ -163,8 +163,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
         self.visualPreferences = visualPreferences
-        let reducedMotion = visualPreferences.mode == .reducedMotion
-            || visualPreferences.mode == .walkingDisabled
+        let reducedMotion = Self.usesReducedMotionForCardAnimations(visualPreferences)
         let id = beginOperation(
             sessionID: sessionID, operation: .presenting,
             reducedMotion: reducedMotion
@@ -220,8 +219,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
         self.visualPreferences = visualPreferences
-        let reducedMotion = visualPreferences.mode == .reducedMotion
-            || visualPreferences.mode == .walkingDisabled
+        let reducedMotion = Self.usesReducedMotionForCardAnimations(visualPreferences)
         guard panel.isVisible else {
             return await present(
                 notification: notification, preferences: preferences,
@@ -287,8 +285,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
         self.visualPreferences = visualPreferences
-        let reducedMotion = visualPreferences.mode == .reducedMotion
-            || visualPreferences.mode == .walkingDisabled
+        let reducedMotion = Self.usesReducedMotionForCardAnimations(visualPreferences)
         let id = beginOperation(
             sessionID: sessionID, operation: .dismissing,
             reducedMotion: reducedMotion
@@ -349,6 +346,14 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             animationSpeed: 1,
             catScale: 1
         ))
+    }
+
+    /// Disable Walking is a cat-travel preference. Card surfaces only reduce their
+    /// presentation, replacement, and dismissal animations for effective Reduced Motion.
+    static func usesReducedMotionForCardAnimations(
+        _ preferences: EffectiveAnimationPreferences
+    ) -> Bool {
+        preferences.mode == .reducedMotion
     }
 
     private func install(

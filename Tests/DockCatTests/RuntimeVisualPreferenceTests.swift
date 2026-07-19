@@ -5,6 +5,18 @@ import XCTest
 
 @MainActor
 final class RuntimeVisualPreferenceTests: XCTestCase {
+    func testWalkingDisabledDoesNotReduceCardAnimations() {
+        XCTAssertFalse(CardWindowController.usesReducedMotionForCardAnimations(
+            policy(mode: .walkingDisabled)
+        ))
+        XCTAssertFalse(CardWindowController.usesReducedMotionForCardAnimations(
+            policy(mode: .full)
+        ))
+        XCTAssertTrue(CardWindowController.usesReducedMotionForCardAnimations(
+            policy(mode: .reducedMotion)
+        ))
+    }
+
     func testScaleFacingAndBreathingUseIndependentNodes() async {
         let scene = CatScene(size: CGSize(width: 150, height: 110))
         scene.applyVisualPreferences(policy(scale: 2, idle: false), completeActiveAnimations: false)
