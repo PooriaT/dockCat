@@ -3,8 +3,10 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var state: AppState
+    let settingsPresenter: SettingsWindowPresenter
+
     var body: some View {
-        Button("Show Settings") { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil); NSApp.activate(ignoringOtherApps: true) }
+        Button("Show Settings") { settingsPresenter.present(source: .menu) }
         Divider()
         Button(state.runtimeMode.isEnabled ? "Disable DockCat" : "Enable DockCat") {
             state.setDockCatEnabled(!state.runtimeMode.isEnabled)

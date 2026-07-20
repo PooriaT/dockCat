@@ -98,7 +98,7 @@ final class AppState: ObservableObject {
     )
     private var desiredEnabled = false
     private var runtimeGeneration: UInt64 = 0
-    private var hasStarted = false
+    private var bootstrapGuard = ApplicationBootstrapGuard()
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
 
     var runtimeMode: DockCatRuntimeMode { runtimeSnapshot.mode }
@@ -108,8 +108,10 @@ final class AppState: ObservableObject {
     var canSubmitNotifications: Bool { runtimeMode.acceptsSubmissions }
 
     func start() {
-        guard !hasStarted else { return }
-        hasStarted = true
+        guard bootstrapGuard.beginIfNeeded() else {
+            logger.error("Bootstrap duplicate-start rejected")
+            return
+        }
         desiredEnabled = settings.preferences.enabled
         runtimeSnapshot = runtimeLifecycle.snapshot
         settings.accessibilityDisplayOptions.onChange = { [weak self] _ in
@@ -629,11 +631,6 @@ final class AppState: ObservableObject {
                   update.notification.id == current?.id {
             replaceUpdatedCurrent(update.notification, revision: update.revision)
         }
-    }
-
-    func receive(url: URL) {
-        do { submit(try URLSchemeParser(defaultDuration: settings.preferences.defaultTransientDuration).parse(url)) }
-        catch { logger.error("URL notification rejected: \(String(describing: error), privacy: .public)") }
     }
 
     func refreshPlacement() { reposition() }

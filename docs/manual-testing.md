@@ -1,5 +1,18 @@
 # Manual testing
 
+## Hidden menu-bar recovery
+
+- In Settings, turn off **Show menu-bar icon**. Cancel the warning and confirm the paw remains. Repeat, copy the recovery command, and confirm the command is on the pasteboard without hiding. Repeat and choose **Hide Menu Item**.
+- Confirm the warning says DockCat has no normal Dock icon and that hiding does not affect notification delivery.
+- With the paw hidden, run `open 'dockcat://settings'`; Settings must open and the paw must remain hidden. Run `open 'dockcat://settings?restoreMenuBar=1'`; the existing Settings scene must come forward and the paw must return.
+- Hide the paw again and run `open -a DockCat` while DockCat is already running. The existing process must open Settings through the reopen callback without restoring the preference.
+- Quit DockCat, then separately test `open -a DockCat --args --show-settings` and `open -a DockCat --args --restore-menu-bar`.
+- Repeat the URL, reopen, and command-line cases while delivery is paused, while DockCat is globally disabled, and while a transient is active. Enabled state, pause, queue/current item, and remaining time must not change.
+- Repeat once with launch at login enabled and once disabled. A background login launch with the paw hidden must not automatically show Settings, and later recovery must use the existing process without duplicate overlays or sources.
+- Temporarily test a build without the `dockcat` entry in `CFBundleURLTypes`. The Settings toggle must refuse to hide and show an actionable error; runtime repair must not be attempted.
+- Inspect Console logs. They may identify URL/recovery categories, Settings request sources, verification results, visibility transitions, and duplicate bootstrap rejection, but never URL queries or notification content.
+- For the narrow fallback, quit the app, run `defaults delete com.example.DockCat DockCat.menuBarVisible`, relaunch, and confirm the paw defaults visible while unrelated settings remain unchanged.
+
 ## Global lifecycle
 
 - Launch once with DockCat enabled and once with it disabled. Disabled startup must show no cat, card, or calibration preview and must not start System Notifications observation.
