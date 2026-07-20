@@ -67,19 +67,37 @@ final class CatAnimationAtlasLoader {
 
 struct ProductionCatAnimationAssetLocator: CatAnimationAssetLocating {
     private let bundle: Bundle
-    init(bundle: Bundle = .module) { self.bundle = bundle }
+    private let resourcePrefix: String
+    init(bundle: Bundle = .dockCatAnimationResources) {
+        self.bundle = bundle
+        if bundle.url(forResource: "CatAnimations", withExtension: nil) != nil {
+            resourcePrefix = "CatAnimations"
+        } else {
+            resourcePrefix = "Resources/CatAnimations"
+        }
+    }
     func manifestData() throws -> Data {
-        guard let url = bundle.url(forResource: "CatAnimations/manifest", withExtension: "json") ?? bundle.url(forResource: "manifest", withExtension: "json", subdirectory: "CatAnimations") else { throw CocoaError(.fileNoSuchFile) }
+        guard let url = bundle.url(forResource: "manifest", withExtension: "json", subdirectory: resourcePrefix) else { throw CocoaError(.fileNoSuchFile) }
         return try Data(contentsOf: url)
     }
-    func textureAtlas(named: String) throws -> SKTextureAtlas { SKTextureAtlas(named: "CatAnimations/\(named)") }
+    func textureAtlas(named: String) throws -> SKTextureAtlas { SKTextureAtlas(named: "\(resourcePrefix)/\(named)", in: bundle) }
     func sourceImageMetadata(for frameName: String, inAtlas atlasName: String) throws -> CatFrameImageMetadata {
-        let subdirectory = "CatAnimations/\(atlasName).atlas"
+        let subdirectory = "\(resourcePrefix)/\(atlasName).atlas"
         guard let url = bundle.url(forResource: frameName, withExtension: "png", subdirectory: subdirectory) ?? bundle.url(forResource: frameName, withExtension: nil, subdirectory: subdirectory) else { throw CocoaError(.fileNoSuchFile) }
         return try Self.metadata(url: url)
     }
     static func metadata(url: URL) throws -> CatFrameImageMetadata {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any], let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int else { throw CocoaError(.fileReadCorruptFile) }
         return .init(pixelWidth: w, pixelHeight: h)
+    }
+}
+
+private extension Bundle {
+    static var dockCatAnimationResources: Bundle {
+#if SWIFT_PACKAGE
+        .module
+#else
+        .main
+#endif
     }
 }
