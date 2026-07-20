@@ -6,9 +6,13 @@ materialize the runtime PNG atlas locally without committing binary files to sys
 that reject binary PR diffs.
 """
 from pathlib import Path
-import json, math, os, struct, zlib
+import json, math, struct, zlib
 W, H = 300, 220
-OUT = Path("Sources/DockCat/Resources/CatAnimations/DockCatCat.atlas")
+RESOURCE_DIR = Path("Sources/DockCat/Resources/CatAnimations")
+OUT = RESOURCE_DIR / "DockCatCat.atlas"
+ASSET_SET_ID = "dockcat.orange.v1"
+ASSET_SET_VERSION = "1.0.0"
+ATLAS_NAME = "DockCatCat"
 CLIPS = [('sleep',10,.16,'loop'),('wake',10,.08,'once'),('pickUp',10,.08,'once'),('turnToPresentation',8,.07,'once'),('walkCarry',10,.08,'loop'),('present',8,.08,'once'),('wait',8,.18,'loop'),('turnHome',8,.07,'once'),('walkHome',10,.08,'loop'),('settle',10,.1,'once')]
 ORANGE=(235,132,42,255); LIGHT=(250,170,78,255); DARK=(70,44,34,255); SHADE=(190,94,33,255); CREAM=(255,216,145,255); PINK=(238,125,126,255)
 def blend(px,c):
@@ -54,11 +58,28 @@ def draw(name,i,n):
     return img
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    manifest={"schemaVersion":1,"assetSetID":"dockcat.orange.v1","assetSetVersion":"1.0.0","atlasName":"DockCatCat","logicalCanvasSize":{"width":150,"height":110},"nativeScale":2,"anchors":{"visualAnchor":{"x":75,"y":35},"feetAnchor":{"x":75,"y":35},"carryAnchor":{"x":117,"y":73},"handoffSize":{"width":36,"height":24},"artworkBounds":{"x":18,"y":18,"width":244,"height":164}},"orientationPolicy":"canonicalRightFacingMirrorLeftRotateVertical","clips":[]}
+    manifest={"schemaVersion":1,"assetSetID":ASSET_SET_ID,"assetSetVersion":ASSET_SET_VERSION,"atlasName":ATLAS_NAME,"logicalCanvasSize":{"width":150,"height":110},"nativeScale":2,"anchors":{"visualAnchor":{"x":75,"y":35},"feetAnchor":{"x":75,"y":35},"carryAnchor":{"x":117,"y":73},"handoffSize":{"width":36,"height":24},"artworkBounds":{"x":18,"y":18,"width":244,"height":164}},"orientationPolicy":"canonicalRightFacingMirrorLeftRotateVertical","clips":[]}
     for name,n,sec,play in CLIPS:
         frames=[]
         for i in range(n):
-            base=frame_name(name,i); frames.append(base); save(OUT/(base+'@2x.png'), draw(name,i,n))
+            base=frame_name(name,i); frames.append(base); save(OUT/(base+'.png'), draw(name,i,n))
         manifest['clips'].append({'id':name,'frameNames':frames,'secondsPerFrame':sec,'playback':play,'restorePolicy':'preserveFinalFrame'})
-    res=OUT.parent; res.mkdir(parents=True, exist_ok=True); (res/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    RESOURCE_DIR.mkdir(parents=True, exist_ok=True)
+    (RESOURCE_DIR/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    asset_sources = {
+        'assetSetID': ASSET_SET_ID,
+        'assetSetVersion': ASSET_SET_VERSION,
+        'ownership': 'project-owned original artwork created for DockCat issue #94',
+        'creator': 'DockCat project contributors',
+        'copyrightHolder': 'DockCat project contributors',
+        'licenseIdentifier': 'DockCat-Original-Art-Repository-License',
+        'licenseFile': 'Design/CatAnimations/v1/LICENSE.md',
+        'sourceFiles': ['Design/CatAnimations/v1/DockCat-Cat-v1.svg', 'Design/CatAnimations/v1/FRAME-CATALOG.json'],
+        'exportedFiles': [f'{OUT.as_posix()}/*.png'],
+        'sourceTool': 'Scripts/export-cat-animation-assets.py',
+        'modifications': 'Original deterministic vector/raster construction; no third-party or AI-generated artwork.',
+        'orientationPolicy': 'canonicalRightFacingMirrorLeftRotateVertical',
+        'coverage': [f'{frame}.png' for clip in manifest['clips'] for frame in clip['frameNames']]
+    }
+    (RESOURCE_DIR/'ASSET-SOURCES.json').write_text(json.dumps(asset_sources, indent=2)+'\n')
 if __name__ == '__main__': main()
