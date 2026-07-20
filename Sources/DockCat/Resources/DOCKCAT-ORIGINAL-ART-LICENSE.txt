@@ -1,0 +1,1 @@
+Original DockCat artwork is project-owned. Production assets will be added in issue #94 with explicit ownership and SPDX-compatible license metadata.

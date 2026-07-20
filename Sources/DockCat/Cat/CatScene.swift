@@ -28,9 +28,26 @@ final class CatScene: SKScene {
     private var visualPreferences: EffectiveAnimationPreferences = .default
     private var isSleepingPose = true
     private var currentFacing: CatFacing = .resting
+    private let clipLibrary: CatAnimationClipLibrary?
+    private var currentSpriteClipID: CatAnimationClipID?
 
     override init(size: CGSize) {
+        let artworkLoadResult = CatAnimationAtlasLoader().load()
+        if case .loaded(let library) = artworkLoadResult { self.clipLibrary = library } else { self.clipLibrary = nil }
         super.init(size: size)
+        configureScene()
+    }
+
+    init(size: CGSize, artworkLoadResult: CatArtworkLoadResult) {
+        if case .loaded(let library) = artworkLoadResult { self.clipLibrary = library } else { self.clipLibrary = nil }
+        super.init(size: size)
+        configureScene()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+
+    private func configureScene() {
         backgroundColor = .clear
         scaleMode = .resizeFill
 
@@ -72,8 +89,6 @@ final class CatScene: SKScene {
         playLoop()
     }
 
-    required init?(coder: NSCoder) { nil }
-
     private enum ActionKey {
         static let breathing = "cat.breathing"
         static let walking = "cat.walking"
@@ -90,6 +105,7 @@ final class CatScene: SKScene {
         actionKey: String,
         completion: @escaping @MainActor () -> Void
     ) {
+        if let clipID = CatAnimationClipResolver.clipID(for: animation), playSpriteClip(clipID, animation: animation, duration: duration, preferences: preferences, actionKey: actionKey, completion: completion) { return }
         if preferences.mode == .animationsPaused {
             applyFinalState(for: animation)
             completion()
@@ -278,6 +294,31 @@ final class CatScene: SKScene {
             hideMiniCard()
             playLoop()
         }
+    }
+
+
+    private func playSpriteClip(
+        _ clipID: CatAnimationClipID,
+        animation: CatAnimation,
+        duration: TimeInterval,
+        preferences: EffectiveAnimationPreferences,
+        actionKey: String,
+        completion: @escaping @MainActor () -> Void
+    ) -> Bool {
+        guard let clipLibrary else { return false }
+        if case .walkToPresentationLoop(let context) = animation {
+            if preferences.mode == .walkingDisabled || context.phase == .staticCarry {
+                applyFinalState(for: animation); completion(); return true
+            }
+        }
+        let clip = clipLibrary[clipID]
+        currentSpriteClipID = clipID
+        applyFinalState(for: animation)
+        if preferences.mode == .animationsPaused || preferences.mode == .reducedMotion || clip.textures.count <= 1 || clip.playback == .loop {
+            completion(); return true
+        }
+        poseRoot.run(.sequence([.wait(forDuration: max(0.05, min(duration, Double(clip.textures.count) * clip.secondsPerFrame))), .run { completion() }]), withKey: actionKey)
+        return true
     }
 
     private func finishAnimation(
@@ -506,4 +547,6 @@ final class CatScene: SKScene {
     var isWalkingForTesting: Bool {
         poseRoot.action(forKey: ActionKey.walking) != nil
     }
+    var currentSpriteClipIDForTesting: CatAnimationClipID? { currentSpriteClipID }
+    var usesSpriteAtlasForTesting: Bool { clipLibrary != nil }
 }

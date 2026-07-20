@@ -1,0 +1,6 @@
+{
+  "assetSetID": "dockcat-production-placeholder",
+  "assetSetVersion": "0.0.0",
+  "entries": [],
+  "notes": "Production cat animation artwork is intentionally deferred to issue #94. No production atlas is packaged in this PR."
+}
