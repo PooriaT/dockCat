@@ -3,7 +3,7 @@ import DockCatCore
 import Foundation
 import OSLog
 
-@MainActor final class NativeBannerDismissalPerformer {
+@MainActor final class NativeBannerDismissalPerformer: NativeBannerDismissalPerforming {
     enum Outcome: Equatable { case pressed, tokenMissingOrExpired, excluded, permissionRequired, unsupported, ambiguous, rejected, pressFailed }
     private let registry: AccessibilityElementRegistry
     private let client: AccessibilityAPIClientProtocol
