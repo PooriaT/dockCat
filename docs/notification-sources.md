@@ -44,3 +44,9 @@ The tracker is capacity bounded and uses a bounded reconciliation age for missin
 The System Notifications source offers a separate **Best-effort close original banner after capture** option. It is disabled by default and runs only after Accessibility capture, parsing, lifecycle acceptance, and queue acceptance. It is not pre-display suppression: the native banner can appear briefly or remain visible.
 
 Close-control detection deliberately fails closed. DockCat presses only a structurally identified close/dismiss button and never reply, open, options, destructive, custom, or content actions. Per-application exclusions are stored as normalized bundle identifiers and affect closing only; excluded notifications are still mirrored. macOS Accessibility structures are not a compatibility contract and may change between releases.
+
+## System Notifications status
+
+System Notifications is experimental, opt-in, and disabled by default. Permission is requested only after explicit user action. DockCat observes visible Notification Center UI locally through public Accessibility APIs and never infers hidden content. Caches are bounded and in memory, notification text is not logged, and global disable or permission loss stops source work and clears transient state.
+
+Best-effort native-banner closing is a separate post-capture option, disabled by default, and fail-closed; native banners may still appear or remain. macOS compatibility may change.

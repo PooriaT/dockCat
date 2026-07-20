@@ -26,7 +26,8 @@ struct DockCatApp: App {
             SettingsView(
                 state: appDelegate.state,
                 menuBarVisibility: appDelegate.menuBarVisibility,
-                settingsPresenter: appDelegate.settingsPresenter
+                settingsPresenter: appDelegate.settingsPresenter,
+                diagnosticRecorder: appDelegate.diagnosticRecorder
             )
         }
     }

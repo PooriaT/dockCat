@@ -14,7 +14,7 @@ final class SystemNotificationAccessController: ObservableObject {
 
     private let trust: AccessibilityTrustChecking
     private weak var source: SystemNotificationSourceControlling?
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "SystemNotificationSource")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "SystemNotificationSource")
     @Published private(set) var userRequested: Bool
     @Published private(set) var runtimeAllowed: Bool
     private(set) var generation: UInt64 = 0

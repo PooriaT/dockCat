@@ -14,7 +14,7 @@ final class DisplayCatalog: ObservableObject {
     private var tokens: [NSObjectProtocol] = []
     private var retainedRuntimeIdentity: DisplayIdentity?
     private var previousSelection: DisplaySelection?
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "Displays")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "Displays")
     var onChange: (@MainActor () -> Void)?
 
     init() {

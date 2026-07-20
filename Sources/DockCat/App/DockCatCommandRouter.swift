@@ -10,7 +10,7 @@ final class DockCatCommandRouter {
     private let submitNotification: NotificationSubmission
     private let restoreMenuBar: MenuBarRestoration
     private let presentSettings: SettingsPresentation
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "Recovery")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "Recovery")
 
     init(
         submitNotification: @escaping NotificationSubmission,

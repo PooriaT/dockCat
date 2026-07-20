@@ -66,7 +66,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     private let panel = CardOverlayPanel()
     private let interactionCoordinator = CardInteractionCoordinator()
     private let accessibilityAnnouncer: CardAccessibilityAnnouncer
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "CardPlacement")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "CardPlacement")
     private var placementContext: CardPlacementContext?
     private var logicalPlacement: CatLogicalPlacement = .home
     private var measuredCardSize = CGSize(
@@ -868,9 +868,13 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             availableHeight: availableSize.height,
             measurements: regionMeasurements
         ))
-        measuredCardSize = CGSize(layoutPlan.cardSize)
+        measuredCardSize = Self.integralCardSize(CGSize(layoutPlan.cardSize))
         panel.setContentSize(measuredCardSize)
         hostingView?.frame = CGRect(origin: .zero, size: measuredCardSize)
+    }
+
+    private static func integralCardSize(_ size: CGSize) -> CGSize {
+        CGSize(width: ceil(size.width), height: ceil(size.height))
     }
 
     /// Screen margin is removed here to provide the planner's placement-safe dimensions.

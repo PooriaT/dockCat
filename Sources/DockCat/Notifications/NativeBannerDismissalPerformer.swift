@@ -3,13 +3,13 @@ import DockCatCore
 import Foundation
 import OSLog
 
-@MainActor final class NativeBannerDismissalPerformer {
+@MainActor final class NativeBannerDismissalPerformer: NativeBannerDismissalPerforming {
     enum Outcome: Equatable { case pressed, tokenMissingOrExpired, excluded, permissionRequired, unsupported, ambiguous, rejected, pressFailed }
     private let registry: AccessibilityElementRegistry
     private let client: AccessibilityAPIClientProtocol
     private let trust: AccessibilityTrustChecking
     private let policy = CloseControlSelectionPolicy()
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "NativeBannerDismissal")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "NativeBannerDismissal")
 
     init(registry: AccessibilityElementRegistry, client: AccessibilityAPIClientProtocol,
          trust: AccessibilityTrustChecking = AccessibilityTrustController()) {

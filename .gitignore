@@ -3,3 +3,7 @@
 DerivedData/
 xcuserdata/
 *.xcuserstate
+.ci-logs/
+.ci-results/
+.ci-derived-data/
+.local-derived-data/

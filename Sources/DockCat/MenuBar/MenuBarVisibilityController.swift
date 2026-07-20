@@ -82,7 +82,7 @@ final class MenuBarVisibilityController: ObservableObject {
 
     private let defaults: UserDefaults
     private let recoveryConfiguration: MenuBarRecoveryConfigurationChecking
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "Recovery")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "Recovery")
 
     init(
         defaults: UserDefaults = .standard,
