@@ -11,7 +11,7 @@ final class DockCalibrationPreviewController {
         title: "Presentation", color: .systemOrange,
         accessibilityLabel: "DockCat presentation anchor preview"
     )
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "CalibrationPreview")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "CalibrationPreview")
     private(set) var isActive = false
 
     func start(with placement: DockPlacement) {

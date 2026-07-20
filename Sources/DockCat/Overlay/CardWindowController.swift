@@ -66,7 +66,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     private let panel = CardOverlayPanel()
     private let interactionCoordinator = CardInteractionCoordinator()
     private let accessibilityAnnouncer: CardAccessibilityAnnouncer
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "CardPlacement")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "CardPlacement")
     private var placementContext: CardPlacementContext?
     private var logicalPlacement: CatLogicalPlacement = .home
     private var measuredCardSize = CGSize(

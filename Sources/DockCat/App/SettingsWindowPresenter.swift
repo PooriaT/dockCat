@@ -19,7 +19,7 @@ final class SettingsWindowPresenter {
     private let bringExistingWindowToFront: BringExistingWindowToFront
     private let openSettingsScene: OpenSettingsScene
     private let activateApplication: ActivateApplication
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "Recovery")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "Recovery")
 
     let isAvailable: Bool
 

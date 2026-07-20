@@ -62,8 +62,8 @@ final class AccessibilityNotificationParserTests: XCTestCase {
         XCTAssertEqual(try parser.parse(AXFixtures.banner(title: "   ")).get().title, .empty)
     }
     func testDockCatOriginIsExcludedByStableBundleOnly() throws {
-        let policy = AccessibilityNotificationExclusionPolicy(ownBundleIdentifier: "com.example.DockCat")
-        let own = try parser.parse(AXFixtures.banner(bundle: "com.example.DockCat")).get()
+        let policy = AccessibilityNotificationExclusionPolicy(ownBundleIdentifier: DockCatProductIdentity.fallbackBundleIdentifier)
+        let own = try parser.parse(AXFixtures.banner(bundle: DockCatProductIdentity.fallbackBundleIdentifier)).get()
         let similarlyNamed = try parser.parse(AXFixtures.banner(source: "DockCat Companion", bundle: "org.example.companion")).get()
         XCTAssertEqual(policy.rejection(for: own), .excludedOrigin)
         XCTAssertNil(policy.rejection(for: similarlyNamed))

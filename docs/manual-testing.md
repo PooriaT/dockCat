@@ -41,7 +41,7 @@ Hands-on procedure:
 - Repeat once with launch at login enabled and once disabled. A background login launch with the paw hidden must not automatically show Settings, and later recovery must use the existing process without duplicate overlays or sources.
 - Temporarily test a build without the `dockcat` entry in `CFBundleURLTypes`. The Settings toggle must refuse to hide and show an actionable error; runtime repair must not be attempted.
 - Inspect Console logs. They may identify URL/recovery categories, Settings request sources, verification results, visibility transitions, and duplicate bootstrap rejection, but never URL queries or notification content.
-- For the narrow fallback, quit the app, run `defaults delete com.example.DockCat DockCat.menuBarVisible`, relaunch, and confirm the paw defaults visible while unrelated settings remain unchanged.
+- For the narrow fallback, quit the app, run `defaults delete io.github.pooriat.DockCat DockCat.menuBarVisible`, relaunch, and confirm the paw defaults visible while unrelated settings remain unchanged.
 
 ## Global lifecycle
 

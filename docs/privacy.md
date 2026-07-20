@@ -14,3 +14,11 @@ External lifecycle identity contains only a source namespace and opaque stable i
 ## Native banner dismissal
 
 Experimental original-banner closing is independently opt-in. Opaque, non-persistent tokens retain Accessibility elements only inside the app process for at most eight seconds, in a registry capped at 64 entries. Tokens are removed on use, expiry, permission loss, or source stop. Diagnostics contain outcome categories and bundle-identifier exclusion matches, never notification content, button labels, AX tree dumps, user identifiers, or bundle paths.
+
+## System Notifications and diagnostics
+
+System Notifications is experimental, opt-in, and disabled by default. DockCat requests Accessibility permission only after explicit user action. When enabled, visible Notification Center UI is processed locally through public Accessibility APIs; hidden content is never inferred. Processing and caches are bounded and in memory. Notification text is not logged. Global disable or permission loss stops source work and clears transient source state.
+
+Best-effort original-banner closing is separate, post-capture, disabled by default, and fail-closed. Native macOS banners may still appear or remain, and compatibility may change across macOS versions. DockCat does not claim App Store compatibility or native notification suppression.
+
+Diagnostic summaries are user-controlled and omit notification content, source text, action URLs, Accessibility text/trees, OSLog archives, and automatic upload.

@@ -91,7 +91,7 @@ open -a DockCat --args --restore-menu-bar
 As a narrow last resort, quit DockCat, delete only the menu-visibility preference, and relaunch. This preserves calibration, notification, source, launch-at-login, and animation preferences:
 
 ```sh
-defaults delete com.example.DockCat DockCat.menuBarVisible
+defaults delete io.github.pooriat.DockCat DockCat.menuBarVisible
 open -a DockCat
 ```
 
@@ -115,3 +115,9 @@ Placeholder: run the Developer tab's presets to view the live SpriteKit cat and 
 - Add appearance themes
 - Add opt-in integrations through the `NotificationSource` protocol
 - Add a carefully sandboxed localhost source if demand justifies its security/maintenance cost
+
+## Release metadata and diagnostics
+
+DockCat uses `io.github.pooriat.DockCat` as its canonical bundle identifier. Xcode build settings are authoritative for bundle ID, product name, marketing version, and build number; `DockCat/Info.plist` references those settings. Manual signing, Developer ID export, notarization, and entitlement policy are documented in `docs/signing-and-release.md`.
+
+System Notifications is experimental, opt-in, disabled by default, and uses local public Accessibility APIs only after explicit user action. Diagnostic summaries are user-controlled, bounded, and omit notification content, source text, action URLs, Accessibility text/trees, OSLog archives, and automatic upload; see `docs/diagnostics.md`.

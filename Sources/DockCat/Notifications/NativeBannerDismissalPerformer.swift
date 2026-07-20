@@ -9,7 +9,7 @@ import OSLog
     private let client: AccessibilityAPIClientProtocol
     private let trust: AccessibilityTrustChecking
     private let policy = CloseControlSelectionPolicy()
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "NativeBannerDismissal")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "NativeBannerDismissal")
 
     init(registry: AccessibilityElementRegistry, client: AccessibilityAPIClientProtocol,
          trust: AccessibilityTrustChecking = AccessibilityTrustController()) {
