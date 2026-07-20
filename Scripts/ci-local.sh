@@ -23,6 +23,7 @@ echo "Running Swift package tests..."
 swift test --parallel 2>&1 | tee "$LOG_DIR/swift-test.log"
 
 echo "Building DockCat app with code signing disabled..."
+rm -rf "$RESULTS_DIR/DockCatBuild.xcresult"
 xcodebuild \
   -project DockCat.xcodeproj \
   -scheme DockCat \

@@ -73,6 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .ci-logs .ci-results
+          rm -rf .ci-results/DockCatBuild.xcresult
           xcodebuild \
             -project DockCat.xcodeproj \
             -scheme DockCat \
