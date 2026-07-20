@@ -64,7 +64,7 @@ final class PlacementRefreshControllerTests: XCTestCase {
 
         XCTAssertEqual(
             controller.presentationExclusionFrame(),
-            CGRect(x: 734, y: 266, width: 36, height: 24)
+            CGRect(x: 635, y: 205, width: 150, height: 110)
         )
         XCTAssertEqual(
             controller.handoffSourceRect(),

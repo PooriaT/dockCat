@@ -193,11 +193,21 @@ public final class PresentationSessionCoordinator {
         session?.hasPendingExternalDisappearance = false
     }
 
-    public func cancelSession(reason: PresentationCancellationReason) {
-        guard var old = session else { return }
+    @discardableResult
+    public func cancelSession(reason: PresentationCancellationReason) -> [Task<Void, Never>] {
+        guard var old = session else { return [] }
         old.cancellationReason = reason
         session = nil
-        for task in old.tasks.values { task.cancel() }
+        let tasks = Array(old.tasks.values)
+        for task in tasks { task.cancel() }
+        return tasks
+    }
+
+    /// Invalidates the session before cancellation, then waits until every owned child task
+    /// has observed cancellation. Late completions therefore fail session validation.
+    public func cancelSessionAndWait(reason: PresentationCancellationReason) async {
+        let tasks = cancelSession(reason: reason)
+        for task in tasks { await task.value }
     }
 
     public func finishSession(_ id: PresentationSessionID) {

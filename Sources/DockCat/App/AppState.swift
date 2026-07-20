@@ -23,16 +23,25 @@ final class AppState: ObservableObject {
     @Published private(set) var currentPlacement: DockPlacement?
     @Published private var isPlacementCurrentlyResolved = false
     @Published private(set) var isCalibrationPreviewActive = false
+    @Published private(set) var effectiveAnimationPreferences: EffectiveAnimationPreferences = .default
+    @Published private(set) var runtimeSnapshot = DockCatRuntimeSnapshot(
+        mode: .disabled,
+        visualMode: .full,
+        systemSourceRequested: false
+    )
     let settings = SettingsStore()
     let displayCatalog = DisplayCatalog()
     private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
         dismissalRegistry: accessibilityElementRegistry,
-        eventHandler: { [weak self] event in self?.receive(sourceEvent: event) },
+        generatedEventHandler: { [weak self] event, generation in
+            self?.receive(sourceEvent: event, generation: generation)
+        },
         outcomeHandler: { _ in }
     )
     lazy var systemNotificationAccess: SystemNotificationAccessController = {
         let controller = SystemNotificationAccessController(
             enabled: settings.preferences.systemNotificationsEnabled,
+            runtimeAllowed: false,
             source: systemNotificationSource,
             startImmediately: false
         )
@@ -65,7 +74,8 @@ final class AppState: ObservableObject {
     private let calibrationPreview = DockCalibrationPreviewController()
     private let presentation = PresentationSessionCoordinator()
     private var claimTask: Task<Void, Never>?
-    private var disableCleanupTask: Task<Void, Never>?
+    private var lifecycleTask: Task<Void, Never>?
+    private var presentationCancellationTasks: [Task<Void, Never>] = []
     private var recoveryTask: Task<Void, Never>?
     private var pauseTransitionTask: Task<Void, Never>?
     private var isRecovering = false
@@ -78,56 +88,126 @@ final class AppState: ObservableObject {
     private var deferredExternalDisappearance: DeferredExternalRemoval?
     private var dismissingNotification: DockCatNotification?
     private var placementRefreshTask: Task<Void, Never>?
+    private var visualPreferenceRefreshTask: Task<Void, Never>?
     private var placementRevision: UInt64 = 0
     private var lastValidPlacement: DockPlacement?
+    private lazy var runtimeLifecycle = DockCatRuntimeLifecycle(
+        initiallyEnabled: settings.preferences.enabled,
+        visualMode: settings.effectiveAnimationPreferences.mode,
+        systemSourceRequested: settings.preferences.systemNotificationsEnabled
+    )
+    private var desiredEnabled = false
+    private var runtimeGeneration: UInt64 = 0
+    private var bootstrapGuard = ApplicationBootstrapGuard()
+    private var startupNotificationBuffer = StartupNotificationBuffer()
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
 
+    var runtimeMode: DockCatRuntimeMode { runtimeSnapshot.mode }
+    var canMutatePause: Bool {
+        runtimeMode.acceptsPauseMutation && !isPauseTransitioning && lifecycleTask == nil
+    }
+    var canSubmitNotifications: Bool { runtimeMode.acceptsSubmissions }
+
     func start() {
-        systemNotificationAccess.refresh()
+        guard bootstrapGuard.beginIfNeeded() else {
+            logger.error("Bootstrap duplicate-start rejected")
+            return
+        }
+        desiredEnabled = settings.preferences.enabled
+        runtimeSnapshot = runtimeLifecycle.snapshot
+        settings.accessibilityDisplayOptions.onChange = { [weak self] _ in
+            self?.scheduleVisualPreferenceRefresh()
+        }
+        settings.accessibilityDisplayOptions.start()
+        applyNewestVisualPreferences()
+        systemNotificationAccess.setRuntimeAllowed(false)
         applyNewestPlacement()
         cardWindow.onDismiss = { [weak self] in self?.dismissCurrent() }
         displayCatalog.onChange = { [weak self] in
             self?.objectWillChange.send()
             self?.reposition()
         }
-        lifecycleReconciliationTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled, let self else { return }
-                let outcomes = await systemNotificationPipeline.reconcile()
-                for outcome in outcomes { await self.applyExternalMutation(outcome.queueMutation) }
-            }
+        if desiredEnabled {
+            scheduleLifecycleTransaction()
+        } else {
+            catWindow.hideOverlay()
+            cardWindow.forceHide()
+            stopCalibrationPreview()
         }
     }
 
-    func stop() {
-        clearExternalNotifications()
+    func stop() async {
+        guard runtimeMode != .shuttingDown else { return }
+        _ = applyRuntime(.shutdown)
+        desiredEnabled = false
+        runtimeGeneration &+= 1
+        let activeLifecycle = lifecycleTask
+        lifecycleTask = nil
+        activeLifecycle?.cancel()
+        await activeLifecycle?.value
+        systemNotificationAccess.setRuntimeAllowed(false)
         systemNotificationAccess.shutdown()
-        claimTask?.cancel()
-        disableCleanupTask?.cancel()
-        disableCleanupTask = nil
-        presentation.cancelSession(reason: .appShutdown)
-        recoveryTask?.cancel()
-        pauseTransitionTask?.cancel()
-        lifecycleReconciliationTask?.cancel()
-        lifecycleReconciliationTask = nil
+        await systemNotificationPipeline.deactivate()
+        await stopLifecycleReconciliationAndWait()
+        let claim = claimTask
+        claimTask = nil
+        claim?.cancel()
+        await claim?.value
+        let pause = pauseTransitionTask
+        pauseTransitionTask = nil
+        pause?.cancel()
+        await pause?.value
+        let recovery = recoveryTask
+        recoveryTask = nil
+        recovery?.cancel()
+        await recovery?.value
+        let presentationTasks = presentationCancellationTasks
+            + presentation.cancelSession(reason: .appShutdown)
+        presentationCancellationTasks.removeAll()
+        presentationTasks.forEach { $0.cancel() }
+        cardWindow.cancelPresentationAnimation()
+        catWindow.cancelVisualWork()
+        cardWindow.forceHide()
+        catWindow.hideOverlay()
+        for task in presentationTasks { await task.value }
+        let clear = await queue.clearForGlobalDisable()
+        _ = observeQueueRevision(clear.revision)
+        projectNoCurrent(revision: clear.revision)
+        requestedPauseState = false
+        isPaused = false
+        isPauseTransitioning = false
+        deferredExternalUpdate = nil
+        deferredExternalDisappearance = nil
+        dismissingNotification = nil
+        startupNotificationBuffer.removeAll()
+        isRecovering = false
+        recoveryGate.recoveryCompleted()
+        let machineRecovery = machine.recoverToSleeping()
+        catState = machineRecovery.safeState
+        catWindow.resetVisualStateWhileHidden()
         placementRefreshTask?.cancel()
         placementRefreshTask = nil
-        cardWindow.forceHide()
-        catWindow.cancelVisualWork()
+        visualPreferenceRefreshTask?.cancel()
+        visualPreferenceRefreshTask = nil
+        settings.accessibilityDisplayOptions.stop()
         stopCalibrationPreview()
         displayCatalog.stop()
     }
 
     private func clearExternalNotifications() {
+        guard runtimeMode.acceptsSubmissions else { return }
+        let generation = runtimeGeneration
         Task {
-            let outcomes = await systemNotificationPipeline.sourceStopped()
+            let outcomes = await systemNotificationPipeline.sourceStopped(
+                runtimeGeneration: generation
+            )
             for outcome in outcomes { await applyExternalMutation(outcome.queueMutation) }
         }
     }
 
     func setSystemNotificationsEnabled(_ enabled: Bool) {
         settings.preferences.systemNotificationsEnabled = enabled
+        _ = applyRuntime(.updateSystemSourceRequested(enabled))
         if !enabled {
             cancelActiveExternalSession(reason: .sourceShutdown, context: "source disabled")
             clearExternalNotifications()
@@ -136,51 +216,179 @@ final class AppState: ObservableObject {
     }
 
     func setDockCatEnabled(_ enabled: Bool) {
-        guard settings.preferences.enabled != enabled else { return }
+        guard desiredEnabled != enabled || settings.preferences.enabled != enabled else { return }
         settings.preferences.enabled = enabled
-        if enabled {
-            // A disable cleanup may already be inside the queue actor and cannot be
-            // withdrawn. Its completion restarts delivery after restoring a clean
-            // sleeping projection, so enabling must wait behind it.
-            if disableCleanupTask == nil { beginFlowIfNeeded() }
-            return
+        desiredEnabled = enabled
+        if !enabled { startupNotificationBuffer.removeAll() }
+        if !enabled && (runtimeMode == .running || runtimeMode == .deliveryPaused) {
+            _ = applyRuntime(.beginDisabling)
+            runtimeGeneration &+= 1
+            systemNotificationAccess.setRuntimeAllowed(false)
+            stopCalibrationPreview()
+            claimTask?.cancel()
+            pauseTransitionTask?.cancel()
+            presentationCancellationTasks = presentation.cancelSession(reason: .globalDisable)
+            cardWindow.forceHide()
+            catWindow.hideOverlay()
+        } else if enabled, runtimeMode == .disabled, lifecycleTask == nil {
+            _ = applyRuntime(.beginEnabling)
         }
+        scheduleLifecycleTransaction()
+    }
+
+    private func scheduleLifecycleTransaction() {
+        guard lifecycleTask == nil, runtimeMode != .shuttingDown else { return }
+        lifecycleTask = Task { [weak self] in
+            await self?.drainLifecycleRequests()
+        }
+    }
+
+    private func drainLifecycleRequests() async {
+        while !Task.isCancelled, runtimeMode != .shuttingDown {
+            if desiredEnabled {
+                if runtimeMode == .disabled { _ = applyRuntime(.beginEnabling) }
+                guard runtimeMode == .enabling else { break }
+                await performEnableTransaction()
+            } else {
+                if runtimeMode == .running || runtimeMode == .deliveryPaused || runtimeMode == .enabling {
+                    _ = applyRuntime(.beginDisabling)
+                    runtimeGeneration &+= 1
+                    systemNotificationAccess.setRuntimeAllowed(false)
+                }
+                guard runtimeMode == .disabling else { break }
+                await performDisableTransaction()
+            }
+        }
+        lifecycleTask = nil
+        if runtimeMode == .running { beginFlowIfNeeded() }
+        if desiredEnabled != runtimeMode.isEnabled, runtimeMode != .shuttingDown {
+            scheduleLifecycleTransaction()
+        }
+    }
+
+    private func performDisableTransaction() async {
         stopCalibrationPreview()
-        claimTask?.cancel()
+        await systemNotificationPipeline.deactivate()
+        await stopLifecycleReconciliationAndWait()
+        let claim = claimTask
         claimTask = nil
-        pauseTransitionTask?.cancel()
-        requestedPauseState = false
-        presentation.cancelSession(reason: .globalDisable)
+        claim?.cancel()
+        await claim?.value
+        let pause = pauseTransitionTask
+        pauseTransitionTask = nil
+        pause?.cancel()
+        await pause?.value
+        let cancelledRecoveryTask = self.recoveryTask
+        self.recoveryTask = nil
+        cancelledRecoveryTask?.cancel()
+        await cancelledRecoveryTask?.value
+        if presentationCancellationTasks.isEmpty {
+            await presentation.cancelSessionAndWait(reason: .globalDisable)
+        } else {
+            let tasks = presentationCancellationTasks
+            presentationCancellationTasks.removeAll()
+            for task in tasks { await task.value }
+        }
+        cardWindow.cancelPresentationAnimation()
+        catWindow.cancelVisualWork()
         cardWindow.forceHide()
-        catWindow.resetToSleeping()
+        catWindow.hideOverlay()
+        let clear = await queue.clearForGlobalDisable()
+        guard runtimeMode != .shuttingDown else { return }
+        _ = observeQueueRevision(clear.revision)
+        projectNoCurrent(revision: clear.revision)
         deferredExternalUpdate = nil
         deferredExternalDisappearance = nil
         dismissingNotification = nil
-        guard disableCleanupTask == nil else { return }
-        disableCleanupTask = Task { [weak self] in
-            guard let self else { return }
-            let completion = await queue.completeCurrent(policy: .leavePendingForLater)
-            guard !Task.isCancelled else {
-                disableCleanupTask = nil
-                return
-            }
-            _ = observeQueueRevision(completion.revision)
-            projectNoCurrent(revision: completion.revision)
-            let pause = await queue.setPaused(false)
-            guard !Task.isCancelled else {
-                disableCleanupTask = nil
-                return
-            }
-            _ = observeQueueRevision(pause.revision)
-            requestedPauseState = false
-            isPaused = false
-            isPauseTransitioning = false
-            pauseTransitionTask = nil
-            let recovery = machine.recoverToSleeping()
-            catState = recovery.safeState
-            disableCleanupTask = nil
-            if settings.preferences.enabled { beginFlowIfNeeded() }
+        requestedPauseState = false
+        isPaused = false
+        isPauseTransitioning = false
+        isRecovering = false
+        recoveryGate.recoveryCompleted()
+        let recovery = machine.recoverToSleeping()
+        catState = recovery.safeState
+        catWindow.resetVisualStateWhileHidden()
+        logger.info(
+            "Queue cleared current=\(clear.removedCurrentID != nil, privacy: .public) pending=\(clear.removedPendingCount, privacy: .public) revision=\(clear.revision, privacy: .public)"
+        )
+        _ = applyRuntime(.finishDisabling)
+    }
+
+    private func performEnableTransaction() async {
+        runtimeGeneration &+= 1
+        let generation = runtimeGeneration
+        systemNotificationAccess.setRuntimeAllowed(false)
+        stopLifecycleReconciliation()
+        let clear = await queue.clearForGlobalDisable()
+        _ = observeQueueRevision(clear.revision)
+        projectNoCurrent(revision: clear.revision)
+        requestedPauseState = false
+        isPaused = false
+        isPauseTransitioning = false
+        deferredExternalUpdate = nil
+        deferredExternalDisappearance = nil
+        dismissingNotification = nil
+        let recovery = machine.recoverToSleeping()
+        catState = recovery.safeState
+        applyNewestVisualPreferences()
+        applyNewestPlacement()
+        catWindow.resetVisualStateWhileHidden()
+        guard desiredEnabled, runtimeMode == .enabling, !Task.isCancelled else { return }
+        if isPlacementCurrentlyResolved, let placement = currentPlacement {
+            catWindow.showSleeping(using: placement)
+            logger.info("Cat overlay shown generation=\(generation, privacy: .public)")
         }
+        await queue.activateRuntimeGeneration(generation)
+        await systemNotificationPipeline.activate(runtimeGeneration: generation)
+        systemNotificationAccess.setRuntimeAllowed(true)
+        startLifecycleReconciliation(generation: generation)
+        guard runtimeMode == .enabling, !Task.isCancelled else { return }
+        _ = applyRuntime(.finishEnabling)
+        enqueue(startupNotificationBuffer.drainIfRunning(runtimeMode: runtimeMode))
+        beginFlowIfNeeded()
+    }
+
+    @discardableResult
+    private func applyRuntime(_ action: DockCatRuntimeAction) -> DockCatRuntimeTransition? {
+        let result = runtimeLifecycle.apply(action)
+        guard case .accepted(let transition) = result else { return nil }
+        runtimeSnapshot = transition.next
+        logger.info(
+            "Runtime transition previous=\(transition.previous.mode.rawValue, privacy: .public) next=\(transition.next.mode.rawValue, privacy: .public) generation=\(self.runtimeGeneration, privacy: .public)"
+        )
+        return transition
+    }
+
+    private func startLifecycleReconciliation(generation: UInt64) {
+        guard lifecycleReconciliationTask == nil else { return }
+        lifecycleReconciliationTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, let self,
+                      self.runtimeGeneration == generation,
+                      self.runtimeMode.acceptsSubmissions,
+                      self.systemNotificationAccess.acceptsCallback(
+                        generation: self.systemNotificationAccess.generation
+                      ) else { return }
+                let outcomes = await self.systemNotificationPipeline.reconcile(
+                    runtimeGeneration: generation
+                )
+                guard self.runtimeGeneration == generation else { return }
+                for outcome in outcomes { await self.applyExternalMutation(outcome.queueMutation) }
+            }
+        }
+    }
+
+    private func stopLifecycleReconciliation() {
+        lifecycleReconciliationTask?.cancel()
+        lifecycleReconciliationTask = nil
+    }
+
+    private func stopLifecycleReconciliationAndWait() async {
+        let task = lifecycleReconciliationTask
+        lifecycleReconciliationTask = nil
+        task?.cancel()
+        await task?.value
     }
 
     func sendTest(persistent: Bool = false) {
@@ -190,32 +398,67 @@ final class AppState: ObservableObject {
     }
 
     func submit(_ notification: DockCatNotification) {
-        guard settings.preferences.enabled else { return }
+        if startupNotificationBuffer.deferIfEnabling(
+            notification, runtimeMode: runtimeMode
+        ) {
+            logger.info(
+                "Notification deferred during startup: \(notification.id, privacy: .public), pending: \(self.startupNotificationBuffer.count, privacy: .public)"
+            )
+            return
+        }
+        guard runtimeMode.acceptsSubmissions else { return }
+        enqueue([notification])
+    }
+
+    private func enqueue(_ notifications: [DockCatNotification]) {
+        guard !notifications.isEmpty else { return }
+        let generation = runtimeGeneration
         Task {
-            observeQueueRevision((await queue.setLimit(settings.preferences.queueLimit)).revision)
-            let result = await queue.enqueue(notification)
-            logger.info("Notification received: \(notification.id, privacy: .public), result: \(String(describing: result), privacy: .public)")
-            _ = observeQueueRevision(result.revision)
-            guard result.wasAccepted else { return }
+            observeQueueRevision((await queue.setLimit(
+                settings.preferences.queueLimit, runtimeGeneration: generation
+            )).revision)
+            var acceptedAny = false
+            for notification in notifications {
+                let result = await queue.enqueue(
+                    notification, runtimeGeneration: generation
+                )
+                logger.info("Notification received: \(notification.id, privacy: .public), result: \(String(describing: result), privacy: .public)")
+                _ = observeQueueRevision(result.revision)
+                acceptedAny = acceptedAny || result.wasAccepted
+            }
+            guard acceptedAny, generation == runtimeGeneration,
+                  runtimeMode.acceptsSubmissions else { return }
             beginFlowIfNeeded()
         }
     }
 
-    func receive(sourceEvent: NotificationSourceEvent) {
+    func receive(sourceEvent: NotificationSourceEvent, generation: UInt64) {
+        guard runtimeMode.acceptsSubmissions,
+              systemNotificationAccess.acceptsCallback(generation: generation) else {
+            logger.info("Stale source callback rejected category=runtime-generation")
+            return
+        }
         switch sourceEvent {
         case .notification(let notification), .oneShot(let notification): submit(notification)
         case .appeared(let external): handleExternalAppearance(external.notification)
         case .updated(let external): handleExternalUpdate(external.notification)
         case .disappeared(let identity): handleExternalDisappearance(identity)
         case .accessibilitySnapshot(let snapshot):
-            guard settings.preferences.enabled else { return }
+            let applicationGeneration = runtimeGeneration
             Task {
-                observeQueueRevision((await queue.setLimit(settings.preferences.queueLimit)).revision)
+                observeQueueRevision((await queue.setLimit(
+                    settings.preferences.queueLimit,
+                    runtimeGeneration: applicationGeneration
+                )).revision)
                 let result = await systemNotificationPipeline.ingest(
-                    snapshot, transientDuration: settings.preferences.defaultTransientDuration
+                    snapshot, transientDuration: settings.preferences.defaultTransientDuration,
+                    runtimeGeneration: applicationGeneration
                 )
-                logger.info("Accessibility notification result: \(String(describing: result), privacy: .public)")
-                if settings.preferences.isNativeBannerDismissalEnabled,
+                logger.info("Accessibility notification result=\(String(describing: result.kind), privacy: .public)")
+                if applicationGeneration == runtimeGeneration,
+                   runtimeMode.acceptsSubmissions,
+                   systemNotificationAccess.acceptsCallback(generation: generation),
+                   settings.preferences.isNativeBannerDismissalEnabled,
                    systemNotificationAccess.health.isHealthy,
                    let request = await systemNotificationPipeline.takeDismissalRequest() {
                     let exclusions = Set(DockCatPreferences.normalizedBundleIdentifiers(
@@ -242,10 +485,15 @@ final class AppState: ObservableObject {
     }
 
     private func handleExternalAppearance(_ notification: DockCatNotification) {
-        guard settings.preferences.enabled else { return }
+        guard runtimeMode.acceptsSubmissions else { return }
+        let generation = runtimeGeneration
         Task {
-            observeQueueRevision((await queue.setLimit(settings.preferences.queueLimit)).revision)
-            await applyExternalMutation(await queue.enqueueAppeared(notification))
+            observeQueueRevision((await queue.setLimit(
+                settings.preferences.queueLimit, runtimeGeneration: generation
+            )).revision)
+            await applyExternalMutation(await queue.enqueueAppeared(
+                notification, runtimeGeneration: generation
+            ))
         }
     }
 
@@ -261,13 +509,21 @@ final class AppState: ObservableObject {
     }
 
     private func handleExternalUpdate(_ notification: DockCatNotification) {
-        Task { await applyExternalMutation(await queue.updateExternal(notification)) }
+        guard runtimeMode.acceptsSubmissions else { return }
+        let generation = runtimeGeneration
+        Task { await applyExternalMutation(await queue.updateExternal(
+            notification, runtimeGeneration: generation
+        )) }
     }
 
     private func applyExternalMutation(
         _ mutation: DockCatCore.NotificationQueue.ExternalMutationResult?
     ) async {
         guard let mutation else { return }
+        guard runtimeMode.acceptsSubmissions else {
+            logger.info("Stale source callback rejected category=runtime-mode")
+            return
+        }
         guard observeQueueRevision(mutation.revision) else {
             // A stale insertion is still stored. Starting a claim is safe because the actor
             // will return whichever current item is authoritative at its latest revision.
@@ -355,7 +611,11 @@ final class AppState: ObservableObject {
     }
 
     private func handleExternalDisappearance(_ identity: ExternalNotificationIdentity) {
-        Task { await applyExternalMutation(await queue.removeExternal(identity)) }
+        guard runtimeMode.acceptsSubmissions else { return }
+        let generation = runtimeGeneration
+        Task { await applyExternalMutation(await queue.removeExternal(
+            identity, runtimeGeneration: generation
+        )) }
     }
 
     private func dismissSourceCurrent(_ notification: DockCatNotification, revision: NotificationQueueRevision) {
@@ -396,12 +656,62 @@ final class AppState: ObservableObject {
         }
     }
 
-    func receive(url: URL) {
-        do { submit(try URLSchemeParser(defaultDuration: settings.preferences.defaultTransientDuration).parse(url)) }
-        catch { logger.error("URL notification rejected: \(String(describing: error), privacy: .public)") }
+    func refreshPlacement() { reposition() }
+
+    func setCatScale(_ value: Double) {
+        settings.preferences.catScale = EffectiveAnimationPreferences.clampedCatScale(value)
+        scheduleVisualPreferenceRefresh()
     }
 
-    func refreshPlacement() { reposition() }
+    func setIdleAnimation(_ enabled: Bool) {
+        settings.preferences.idleAnimation = enabled
+        scheduleVisualPreferenceRefresh()
+    }
+
+    func setDisableWalking(_ disabled: Bool) {
+        settings.preferences.disableWalking = disabled
+        scheduleVisualPreferenceRefresh()
+    }
+
+    func setPauseAnimations(_ paused: Bool) {
+        settings.preferences.pauseAnimations = paused
+        scheduleVisualPreferenceRefresh()
+    }
+
+    func setAppReducedMotion(_ reduced: Bool) {
+        settings.preferences.reducedMotion = reduced
+        scheduleVisualPreferenceRefresh()
+    }
+
+    func setAnimationSpeed(_ speed: Double) {
+        settings.preferences.animationSpeed = EffectiveAnimationPreferences.clampedSpeed(speed)
+        scheduleVisualPreferenceRefresh()
+    }
+
+    /// Coalesces rapid slider ticks while persisting every newest value before runtime use.
+    private func scheduleVisualPreferenceRefresh() {
+        guard visualPreferenceRefreshTask == nil else { return }
+        visualPreferenceRefreshTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, !Task.isCancelled else { return }
+            self.visualPreferenceRefreshTask = nil
+            self.applyNewestVisualPreferences()
+        }
+    }
+
+    private func applyNewestVisualPreferences() {
+        let previous = effectiveAnimationPreferences
+        let newest = settings.effectiveAnimationPreferences
+        effectiveAnimationPreferences = newest
+        _ = applyRuntime(.updateVisualMode(newest.mode))
+        let geometryChanged = catWindow.applyVisualPreferences(newest)
+        cardWindow.applyVisualPreferences(newest)
+        if geometryChanged { reposition() }
+        guard previous != newest else { return }
+        logger.info(
+            "Visual preferences mode=\(newest.mode.rawValue, privacy: .public) appReduced=\(newest.appReducedMotion, privacy: .public) systemReduced=\(newest.systemReducedMotion, privacy: .public) idle=\(newest.idleAnimationEnabled, privacy: .public) scale=\(newest.catScale, privacy: .public) overlayWidth=\(CatOverlayGeometry(scale: newest.catScale).panelSize.width, privacy: .public) overlayHeight=\(CatOverlayGeometry(scale: newest.catScale).panelSize.height, privacy: .public) rebased=\(geometryChanged, privacy: .public)"
+        )
+    }
 
     var isCalibrationAvailable: Bool {
         isPlacementCurrentlyResolved
@@ -409,7 +719,7 @@ final class AppState: ObservableObject {
     }
 
     func startCalibrationPreview() {
-        guard settings.preferences.enabled,
+        guard runtimeMode.acceptsSubmissions,
               isCalibrationAvailable,
               let placement = currentPlacement else { return }
         calibrationPreview.start(with: placement)
@@ -422,7 +732,7 @@ final class AppState: ObservableObject {
     }
 
     func setPaused(_ paused: Bool) {
-        guard settings.preferences.enabled, disableCleanupTask == nil else { return }
+        guard runtimeMode.acceptsPauseMutation, lifecycleTask == nil else { return }
         requestedPauseState = paused
         if pauseTransitionTask == nil, paused == isPaused { return }
         guard pauseTransitionTask == nil else { return }
@@ -436,7 +746,8 @@ final class AppState: ObservableObject {
         while !Task.isCancelled, !isRecovering {
             let requested = requestedPauseState
             let outcome = await queue.setPaused(requested)
-            guard !Task.isCancelled, !isRecovering else { break }
+            guard !Task.isCancelled, !isRecovering,
+                  runtimeMode.acceptsPauseMutation else { break }
             guard observeQueueRevision(outcome.revision) else {
                 failQueueReconciliation(context: "stale pause decision")
                 break
@@ -452,6 +763,7 @@ final class AppState: ObservableObject {
                 let event: CatEvent = outcome.isPaused ? .pause : .resume
                 guard case .accepted(let transition) = apply(event) else { break }
                 isPaused = outcome.isPaused
+                _ = applyRuntime(outcome.isPaused ? .pauseDelivery : .resumeDelivery)
                 guard executeStateControlEffect(transition.effect) != nil else {
                     failClosedWithoutFlow(transition.effect)
                     break
@@ -479,8 +791,8 @@ final class AppState: ObservableObject {
     }
 
     private func beginFlowIfNeeded() {
-        guard settings.preferences.enabled, lastValidPlacement != nil,
-              disableCleanupTask == nil,
+        guard runtimeMode.permitsQueueClaims, isPlacementCurrentlyResolved,
+              lifecycleTask == nil,
               claimTask == nil, !presentation.hasChoreographyTask,
               current == nil, !isPaused, !isPauseTransitioning,
               !isRecovering else { return }
@@ -613,7 +925,7 @@ final class AppState: ObservableObject {
                 notification: item,
                 preferences: settings.preferences,
                 from: catWindow.handoffSourceRect(),
-                reducedMotion: settings.effectiveReducedMotion,
+                visualPreferences: effectiveAnimationPreferences,
                 sessionID: sessionID
             )
             guard PresentationChoreography.shouldAcceptPresentationCompletion(result),
@@ -637,7 +949,7 @@ final class AppState: ObservableObject {
             let result = await cardWindow.replace(
                 notification: item,
                 preferences: settings.preferences,
-                reducedMotion: settings.effectiveReducedMotion,
+                visualPreferences: effectiveAnimationPreferences,
                 sessionID: sessionID
             )
             guard result == .completed, !Task.isCancelled,
@@ -655,7 +967,7 @@ final class AppState: ObservableObject {
                   presentation.beginPhase(.dismissingCard, for: sessionID) else { return failClosed(effect) }
             let result = await cardWindow.dismissActive(
                 toward: catWindow.handoffSourceRect(),
-                reducedMotion: settings.effectiveReducedMotion,
+                visualPreferences: effectiveAnimationPreferences,
                 sessionID: sessionID
             )
             guard result == .completed, !Task.isCancelled,
@@ -689,8 +1001,7 @@ final class AppState: ObservableObject {
         let notificationID = current?.id ?? dismissingNotification?.id
         let result = await catWindow.animate(
             animation,
-            speed: settings.preferences.animationSpeed,
-            reducedMotion: settings.effectiveReducedMotion,
+            preferences: effectiveAnimationPreferences,
             sessionID: sessionID
         )
         guard result == .completed, !Task.isCancelled,
@@ -936,6 +1247,7 @@ final class AppState: ObservableObject {
     }
 
     private func scheduleRecovery(context: String) {
+        guard runtimeMode.acceptsSubmissions else { return }
         guard recoveryGate.requestRecovery() else { return }
         isRecovering = true
         recoveryTask = Task { [weak self] in
@@ -965,7 +1277,11 @@ final class AppState: ObservableObject {
         presentation.cancelSession(reason: .recovery)
         // Cancellation unblocks continuations first. This final reset runs only after the
         // old flow can no longer overwrite the sleeping pose or card visibility.
-        catWindow.resetToSleeping()
+        if runtimeMode.acceptsSubmissions {
+            catWindow.resetToSleeping()
+        } else {
+            catWindow.resetVisualStateWhileHidden()
+        }
         cardWindow.forceHide()
         deferredExternalUpdate = nil
         deferredExternalDisappearance = nil
@@ -987,7 +1303,7 @@ final class AppState: ObservableObject {
         isRecovering = false
         recoveryGate.recoveryCompleted()
         recoveryTask = nil
-        beginFlowIfNeeded()
+        if runtimeMode.acceptsSubmissions { beginFlowIfNeeded() }
     }
 
     /// Coalesces screen notifications and slider ticks into one main-actor refresh using
@@ -1009,7 +1325,7 @@ final class AppState: ObservableObject {
             presentationPhase: presentation.activePhase,
             hasChoreographyTask: presentation.hasChoreographyTask,
             isRecovering: isRecovering,
-            isEnabled: settings.preferences.enabled
+            isEnabled: runtimeMode.isEnabled
         )
 
         guard let geometry = locator.locate(
@@ -1021,6 +1337,9 @@ final class AppState: ObservableObject {
         ) else {
             stopCalibrationPreview()
             isPlacementCurrentlyResolved = false
+            if runtimeMode == .enabling || runtimeMode == .running {
+                catWindow.hideOverlay()
+            }
             let availability = PlacementRefreshPolicy.availabilityAction(
                 hasResolvedPlacement: false,
                 hasLastValidPlacement: lastValidPlacement != nil
@@ -1065,10 +1384,13 @@ final class AppState: ObservableObject {
             logicalState: logicalPlacement,
             dismissalSourceRect: liveHandoffRect
         )
-        if isFirstValidPlacement {
+        if (isFirstValidPlacement || !catWindow.isVisible),
+           runtimeMode == .running,
+           machine.state == .sleeping,
+           presentation.activeSessionID == nil {
             // Startup with no screen leaves the overlay unordered. Delivery is gated on
             // this first valid placement, so the reset cannot interrupt active work.
-            catWindow.resetToSleeping()
+            catWindow.showSleeping(using: geometry)
             beginFlowIfNeeded()
         }
         logger.info(

@@ -1,5 +1,29 @@
 # Manual testing
 
+## Hidden menu-bar recovery
+
+- In Settings, turn off **Show menu-bar icon**. Cancel the warning and confirm the paw remains. Repeat, copy the recovery command, and confirm the command is on the pasteboard without hiding. Repeat and choose **Hide Menu Item**.
+- Confirm the warning says DockCat has no normal Dock icon and that hiding does not affect notification delivery.
+- With the paw hidden, run `open 'dockcat://settings'`; Settings must open and the paw must remain hidden. Run `open 'dockcat://settings?restoreMenuBar=1'`; the existing Settings scene must come forward and the paw must return.
+- Hide the paw again and run `open -a DockCat` while DockCat is already running. The existing process must open Settings through the reopen callback without restoring the preference.
+- Quit DockCat, then separately test `open -a DockCat --args --show-settings` and `open -a DockCat --args --restore-menu-bar`.
+- Repeat the URL, reopen, and command-line cases while delivery is paused, while DockCat is globally disabled, and while a transient is active. Enabled state, pause, queue/current item, and remaining time must not change.
+- Repeat once with launch at login enabled and once disabled. A background login launch with the paw hidden must not automatically show Settings, and later recovery must use the existing process without duplicate overlays or sources.
+- Temporarily test a build without the `dockcat` entry in `CFBundleURLTypes`. The Settings toggle must refuse to hide and show an actionable error; runtime repair must not be attempted.
+- Inspect Console logs. They may identify URL/recovery categories, Settings request sources, verification results, visibility transitions, and duplicate bootstrap rejection, but never URL queries or notification content.
+- For the narrow fallback, quit the app, run `defaults delete com.example.DockCat DockCat.menuBarVisible`, relaunch, and confirm the paw defaults visible while unrelated settings remain unchanged.
+
+## Global lifecycle
+
+- Launch once with DockCat enabled and once with it disabled. Disabled startup must show no cat, card, or calibration preview and must not start System Notifications observation.
+- Disable while sleeping, waking, travelling out, presenting or replacing a card, waiting on transient expiry, showing a persistent card, returning home, delivery-paused, and with visual animations suppressed. Both overlays and calibration markers must disappear and remain hidden.
+- While disabled, trigger menu tests, simulator events, URL events, and external system notifications. Nothing should enter delivery or modify native system UI.
+- Re-enable and confirm the queue is empty, no prior or partially presented item replays, pause is reset, and the sleeping cat appears only after a valid placement resolves.
+- Leave the System Notifications preference enabled across disable/re-enable and confirm observation stops and restarts. Repeat with the preference disabled and confirm re-enable does not force it on.
+- Pause an active transient, wait longer than its original duration, and resume. The active overlays and queue remain in place and only the saved remaining duration runs. New bounded items may queue while paused.
+- Repeatedly invoke enable/disable and pause/resume, including during transition states, and confirm the menu and Settings always show the same authoritative mode.
+- Quit from each runtime mode and confirm no overlay, source observer, timer, animation continuation, or reconciliation task remains. Menu-bar-hidden recovery is deferred to issue #83.
+
 ## Accessibility normalization and burst deduplication
 
 1. Enable system notifications, trigger one synthetic notification, and verify multiple AX callbacks produce one DockCat card.
@@ -41,6 +65,31 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 ## Reduced Motion
 
 - Enable Reduce Motion and confirm presentation uses fade-in, dismissal uses fade-out, queued replacement uses crossfade, and logical ordering is unchanged.
+
+## Runtime animation and accessibility settings
+
+- Drag Cat scale from 0.5 to 2.0 while sleeping, during outbound/return travel, and with a
+  persistent card visible. Repeat with bottom, left, and right Docks and a negative-coordinate
+  secondary display. Confirm the Dock anchor does not drift, vector art is not clipped, and the
+  card remains separated from the scaled exclusion frame.
+- Disable Idle breathing while sleeping and confirm the pose becomes static immediately.
+  Re-enable it and confirm exactly one breathing loop. Toggle it during delivery and confirm
+  active choreography is not disrupted and the next sleeping pose uses the newest value.
+- Enable Disable walking and send transient and persistent notifications. Confirm wake and
+  pickup remain animated, the mini-card remains visible, both travel directions use a short
+  fade relocation, and no turn/walk loop or continuous Dock traversal occurs.
+- Enable Pause visual animations during wake, travel, card presentation, waiting, card
+  dismissal, return, and settlement. Confirm each visual reaches a valid final state, delivery
+  continues, the transient countdown is neither paused nor restarted, and later queued
+  notifications still present. Disable it and confirm skipped animations are not replayed.
+- Toggle app Reduced Motion and macOS Reduce Motion while a visual operation is active.
+  Confirm the effective mode changes without relaunch, the same notification/session remains
+  authoritative, and transient remaining time and queue order are unchanged.
+- Compare Pause visual animations with Pause DockCat: the former skips only visuals while the
+  latter pauses delivery and preserves transient remaining time.
+- Inspect visual diagnostics. They may contain only effective mode, app/system Reduced Motion,
+  idle state, clamped scale, overlay dimensions, rebase state, and no-walking use—never
+  notification content or display serial values.
 
 ## Cancellation
 

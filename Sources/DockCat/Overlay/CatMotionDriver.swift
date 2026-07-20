@@ -37,8 +37,7 @@ final class CatMotionDriver {
     func move(
         to targetOrigin: CGPoint,
         dockEdge: DockEdge,
-        speed: Double,
-        reducedMotion: Bool,
+        preferences: EffectiveAnimationPreferences,
         presentationSessionID: PresentationSessionID
     ) async -> CatMotionCompletion {
         guard let updater else { return .cancelled }
@@ -48,11 +47,21 @@ final class CatMotionDriver {
             from: CatMotionPoint(updater.frameOrigin),
             requestedDestination: CatMotionPoint(targetOrigin),
             dockEdge: dockEdge,
-            speed: speed,
-            reducedMotion: reducedMotion
+            speed: preferences.speed,
+            reducedMotion: preferences.mode != .full
         )
 
-        if reducedMotion {
+        if preferences.mode == .animationsPaused {
+            guard canUpdate(
+                motionID: motionID,
+                presentationSessionID: presentationSessionID
+            ) else { return .cancelled }
+            updater.setFrameOrigin(CGPoint(plan.destination))
+            updater.alphaValue = 1
+            return coordinator.complete(sessionID: motionID)
+        }
+        if preferences.mode == .reducedMotion
+            || preferences.mode == .walkingDisabled {
             return await runReducedMotion(
                 plan, motionID: motionID, presentationSessionID: presentationSessionID,
                 updater: updater

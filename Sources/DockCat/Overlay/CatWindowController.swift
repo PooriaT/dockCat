@@ -1,9 +1,28 @@
 import AppKit
 import SpriteKit
 import DockCatCore
+import OSLog
 
 private extension CatMotionPoint {
     init(_ point: CGPoint) { self.init(x: Double(point.x), y: Double(point.y)) }
+}
+
+private extension Point {
+    init(_ point: CGPoint) { self.init(x: point.x, y: point.y) }
+}
+
+private extension CGPoint {
+    init(_ point: Point) { self.init(x: point.x, y: point.y) }
+}
+
+private extension CGSize {
+    init(_ size: Size) { self.init(width: size.width, height: size.height) }
+}
+
+private extension CGRect {
+    init(_ rect: Rect) {
+        self.init(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+    }
 }
 
 struct CatPlacementUpdateOutcome {
@@ -15,6 +34,8 @@ struct CatPlacementUpdateOutcome {
 final class CatWindowController {
     private let panel = CatOverlayPanel()
     private let scene = CatScene(size: CGSize(width: 150, height: 110))
+    private var overlayGeometry = CatOverlayGeometry(scale: 1)
+    private var visualPreferences: EffectiveAnimationPreferences = .default
     private var sleepingPoint = CGPoint.zero
     private var presentationPoint = CGPoint.zero
     private var dockEdge: DockEdge = .bottom
@@ -23,22 +44,20 @@ final class CatWindowController {
     private var isMotionPaused = false
     private var motionResumeWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private lazy var motionDriver = CatMotionDriver(updater: panel)
+    private let logger = Logger(
+        subsystem: "com.example.DockCat", category: "CatVisualPreferences"
+    )
 
-    private enum AnchorOffset {
-        static let x: CGFloat = 75
-        static let y: CGFloat = 35
-    }
-
-    private static func panelOrigin(forVisualAnchor anchor: CGPoint) -> CGPoint {
-        CGPoint(x: anchor.x - AnchorOffset.x, y: anchor.y - AnchorOffset.y)
+    private func panelOrigin(forVisualAnchor anchor: CGPoint) -> CGPoint {
+        CGPoint(overlayGeometry.panelOrigin(preservingGlobalVisualAnchor: Point(anchor)))
     }
 
     private func targetOrigin(for animation: CatAnimation) -> CGPoint? {
         switch animation {
         case .walkToPresentation, .walkToPresentationLoop:
-            Self.panelOrigin(forVisualAnchor: presentationPoint)
+            panelOrigin(forVisualAnchor: presentationPoint)
         case .walkHome, .walkHomeLoop:
-            Self.panelOrigin(forVisualAnchor: sleepingPoint)
+            panelOrigin(forVisualAnchor: sleepingPoint)
         default:
             nil
         }
@@ -47,6 +66,11 @@ final class CatWindowController {
     init() {
         let view = SKView(frame: panel.contentView?.bounds ?? .zero)
         view.allowsTransparency = true; view.presentScene(scene); panel.contentView = view
+        scene.updateLayout(
+            size: CGSize(overlayGeometry.panelSize),
+            visualAnchor: CGPoint(overlayGeometry.visualAnchorInPanel),
+            preferences: visualPreferences
+        )
     }
     /// Installs anchors first, then applies the response selected from authoritative
     /// choreography state. Anchor updates never imply a recovery reset.
@@ -65,7 +89,7 @@ final class CatWindowController {
         let motionWasRetargeted: Bool
         switch action {
         case .moveToHome:
-            panel.setFrameOrigin(Self.panelOrigin(forVisualAnchor: sleepingPoint))
+            panel.setFrameOrigin(panelOrigin(forVisualAnchor: sleepingPoint))
             motionWasRetargeted = false
         case .retargetPresentationTravel, .retargetHomeTravel:
             // Cancelling the motion operation wakes the existing travel loop. The loop
@@ -74,7 +98,7 @@ final class CatWindowController {
             motionWasRetargeted = sessionID != nil
         case .moveToPresentation:
             motionDriver.cancelActiveMotion()
-            panel.setFrameOrigin(Self.panelOrigin(forVisualAnchor: presentationPoint))
+            panel.setFrameOrigin(panelOrigin(forVisualAnchor: presentationPoint))
             motionWasRetargeted = false
         case .preserveRecoveryVisuals:
             motionWasRetargeted = false
@@ -84,33 +108,91 @@ final class CatWindowController {
             motionWasRetargeted: motionWasRetargeted
         )
     }
-    func showSleeping() { panel.orderFrontRegardless(); scene.playLoop() }
+    var isVisible: Bool { panel.isVisible }
+
+    func showSleeping(using placement: DockPlacement) {
+        _ = updatePlacement(placement, logicalState: .home, sessionID: nil)
+        resetVisualStateWhileHidden()
+        panel.orderFrontRegardless()
+        scene.playLoop()
+    }
+
+    func hideOverlay() {
+        cancelVisualWork()
+        panel.orderOut(nil)
+    }
+
+    /// Restores the hidden scene without changing panel visibility or placement anchors.
+    func resetVisualStateWhileHidden() {
+        cancelVisualWork()
+        scene.resetToSleeping()
+        panel.setFrameOrigin(panelOrigin(forVisualAnchor: sleepingPoint))
+        panel.alphaValue = 1
+    }
+
+    /// Applies scale and behavior without changing logical placement or presentation identity.
+    /// The live global anchor is recovered from the old geometry before the panel is resized.
+    @discardableResult
+    func applyVisualPreferences(
+        _ preferences: EffectiveAnimationPreferences
+    ) -> Bool {
+        let oldPreferences = visualPreferences
+        let oldGeometry = overlayGeometry
+        let liveAnchor = oldGeometry.globalVisualAnchor(
+            forPanelOrigin: Point(panel.frame.origin)
+        )
+        visualPreferences = preferences
+        overlayGeometry = CatOverlayGeometry(scale: preferences.catScale)
+        let newOrigin = overlayGeometry.panelOrigin(
+            preservingGlobalVisualAnchor: liveAnchor
+        )
+        panel.setFrame(
+            CGRect(origin: CGPoint(newOrigin), size: CGSize(overlayGeometry.panelSize)),
+            display: true
+        )
+        scene.updateLayout(
+            size: CGSize(overlayGeometry.panelSize),
+            visualAnchor: CGPoint(overlayGeometry.visualAnchorInPanel),
+            preferences: preferences
+        )
+
+        let behaviorChanged = oldPreferences.mode != preferences.mode
+            || oldPreferences.speed != preferences.speed
+        let geometryChanged = oldGeometry != overlayGeometry
+        scene.applyVisualPreferences(
+            preferences,
+            completeActiveAnimations: behaviorChanged
+        )
+        if behaviorChanged || geometryChanged {
+            motionDriver.cancelActiveMotion()
+        }
+        return geometryChanged
+    }
+
     func animate(
         _ animation: CatAnimation,
-        speed: Double,
-        reducedMotion: Bool,
+        preferences: EffectiveAnimationPreferences,
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
+        visualPreferences = preferences
         if targetOrigin(for: animation) != nil {
             return await animateTravel(
-                animation, speed: speed, reducedMotion: reducedMotion,
-                sessionID: sessionID
+                animation, sessionID: sessionID
             )
         } else {
             return await scene.runAsync(
                 animation,
                 duration: CatMotionTiming.minimumDuration / max(
-                    CatMotionTiming.minimumSpeed, min(speed, CatMotionTiming.maximumSpeed)
+                    CatMotionTiming.minimumSpeed,
+                    min(preferences.speed, CatMotionTiming.maximumSpeed)
                 ),
-                reducedMotion: reducedMotion
+                preferences: preferences
             )
         }
     }
 
     private func animateTravel(
         _ animation: CatAnimation,
-        speed: Double,
-        reducedMotion: Bool,
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
         let purpose: CatTravelPurpose = switch animation { case .walkHome: .home; default: .presentation }
@@ -120,17 +202,26 @@ final class CatWindowController {
         let initialPlan = CatMotionPlanner.plan(
             from: CatMotionPoint(panel.frame.origin),
             requestedDestination: CatMotionPoint(initialTargetOrigin), dockEdge: initialEdge,
-            speed: speed, reducedMotion: reducedMotion
+            speed: visualPreferences.speed,
+            reducedMotion: visualPreferences.mode != .full
         )
+        let initialPreferences = visualPreferences
+        let skipsWalking = initialPreferences.mode == .walkingDisabled
+            || initialPreferences.mode == .animationsPaused
         let turn = CatLocomotionResolver.travelContext(
             from: initialPlan.start, to: initialPlan.destination, dockEdge: initialEdge,
-            purpose: purpose, phase: .turning, reducedMotion: reducedMotion
+            purpose: purpose, phase: .turning,
+            reducedMotion: initialPreferences.mode == .reducedMotion
         )
-        guard await scene.runAsync(
-            purpose == .home ? .turnHome(turn) : .turnToPresentation(turn),
-            duration: 0.18, reducedMotion: reducedMotion
-        ) == .completed, !Task.isCancelled,
-              ownedVisualWorkGeneration == visualWorkGeneration else { return .cancelled }
+        if !skipsWalking {
+            guard await scene.runAsync(
+                purpose == .home ? .turnHome(turn) : .turnToPresentation(turn),
+                duration: 0.18, preferences: initialPreferences
+            ) == .completed, !Task.isCancelled,
+                  ownedVisualWorkGeneration == visualWorkGeneration else { return .cancelled }
+        } else if purpose == .presentation {
+            scene.showCarriedMiniCard()
+        }
 
         while !Task.isCancelled, ownedVisualWorkGeneration == visualWorkGeneration {
             guard await waitForMotionResume(),
@@ -141,25 +232,38 @@ final class CatWindowController {
             }
             let revision = placementRevision
             let currentEdge = dockEdge
+            let currentPreferences = visualPreferences
+            if currentPreferences.mode == .walkingDisabled {
+                logger.info("Cat travel usedNoWalkingRelocation=true")
+            }
             let plan = CatMotionPlanner.plan(
                 from: CatMotionPoint(panel.frame.origin),
                 requestedDestination: CatMotionPoint(currentTargetOrigin),
-                dockEdge: currentEdge, speed: speed, reducedMotion: reducedMotion
+                dockEdge: currentEdge, speed: currentPreferences.speed,
+                reducedMotion: currentPreferences.mode != .full
             )
             let walk = CatLocomotionResolver.travelContext(
                 from: plan.start, to: plan.destination, dockEdge: currentEdge,
-                purpose: purpose, phase: .walking, reducedMotion: reducedMotion
+                purpose: purpose, phase: .walking,
+                reducedMotion: currentPreferences.mode != .full
             )
-            guard await scene.runAsync(
-                purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk),
-                duration: plan.duration, reducedMotion: reducedMotion
-            ) == .completed, !Task.isCancelled,
-                  ownedVisualWorkGeneration == visualWorkGeneration else { return .cancelled }
+            if currentPreferences.mode == .full
+                || currentPreferences.mode == .reducedMotion {
+                guard await scene.runAsync(
+                    purpose == .home ? .walkHomeLoop(walk) : .walkToPresentationLoop(walk),
+                    duration: plan.duration, preferences: currentPreferences
+                ) == .completed, !Task.isCancelled,
+                      ownedVisualWorkGeneration == visualWorkGeneration else { return .cancelled }
+            } else {
+                scene.stopLocomotion(cancelled: true, context: walk)
+                if purpose == .presentation { scene.showCarriedMiniCard() }
+            }
             guard revision == placementRevision else { continue }
 
             let result = await motionDriver.move(
-                to: currentTargetOrigin, dockEdge: currentEdge, speed: speed,
-                reducedMotion: reducedMotion, presentationSessionID: sessionID
+                to: currentTargetOrigin, dockEdge: currentEdge,
+                preferences: currentPreferences,
+                presentationSessionID: sessionID
             )
             guard !Task.isCancelled,
                   ownedVisualWorkGeneration == visualWorkGeneration else { return .cancelled }
@@ -172,10 +276,12 @@ final class CatWindowController {
             if purpose == .presentation {
                 let stop = CatLocomotionResolver.travelContext(
                     from: plan.start, to: plan.destination, dockEdge: currentEdge,
-                    purpose: purpose, phase: .stopping, reducedMotion: reducedMotion
+                    purpose: purpose, phase: .stopping,
+                    reducedMotion: currentPreferences.mode == .reducedMotion
                 )
                 let stopResult = await scene.runAsync(
-                    .stopAtPresentation(stop), duration: 0.15, reducedMotion: reducedMotion
+                    .stopAtPresentation(stop), duration: 0.15,
+                    preferences: currentPreferences
                 )
                 guard stopResult == .completed, !Task.isCancelled,
                       ownedVisualWorkGeneration == visualWorkGeneration else {
@@ -196,26 +302,25 @@ final class CatWindowController {
     func prepareHandoffPose() { scene.prepareHandoffPose() }
     func completeHandoffPose() { scene.completeHandoffPose() }
 
-    private static func handoffSourceRect(forVisualAnchor anchor: CGPoint) -> CGRect {
-        let center = CGPoint(x: anchor.x + 42, y: anchor.y + 38)
-        return CGRect(x: center.x - 18, y: center.y - 12, width: 36, height: 24)
-    }
-
     /// The live handoff location follows the panel during travel and is the correct target
     /// for rebasing an in-progress dismissal animation.
     func handoffSourceRect() -> CGRect {
         let origin = panel.frame.origin
-        let currentVisualAnchor = CGPoint(
-            x: origin.x + AnchorOffset.x,
-            y: origin.y + AnchorOffset.y
+        let currentVisualAnchor = overlayGeometry.globalVisualAnchor(
+            forPanelOrigin: Point(origin)
         )
-        return Self.handoffSourceRect(forVisualAnchor: currentVisualAnchor)
+        return CGRect(overlayGeometry.handoffFrame(
+            forGlobalVisualAnchor: currentVisualAnchor,
+            facing: scene.facingForGeometry
+        ))
     }
 
     /// Card planning protects the destination handoff location even while the panel is still
     /// travelling from an older screen or Dock edge.
     func presentationExclusionFrame() -> CGRect {
-        Self.handoffSourceRect(forVisualAnchor: presentationPoint)
+        CGRect(overlayGeometry.presentationExclusionFrame(
+            forGlobalVisualAnchor: Point(presentationPoint)
+        ))
     }
     func pause() { isMotionPaused = true; motionDriver.cancelActiveMotion(); scene.isPaused = true }
     func resume() {
@@ -232,14 +337,14 @@ final class CatWindowController {
         scene.cancelAnimations()
     }
     func resetToSleeping() {
-        cancelVisualWork()
-        scene.resetToSleeping()
-        panel.setFrameOrigin(Self.panelOrigin(forVisualAnchor: sleepingPoint))
-        panel.alphaValue = 1
+        resetVisualStateWhileHidden()
         panel.orderFrontRegardless()
     }
 
     var panelOriginForTesting: CGPoint { panel.frame.origin }
+    var panelSizeForTesting: CGSize { panel.frame.size }
+    var sceneScaleForTesting: CGFloat { scene.userScaleForTesting }
+    var sceneIsWalkingForTesting: Bool { scene.isWalkingForTesting }
 
     private func waitForMotionResume() async -> Bool {
         guard isMotionPaused else { return !Task.isCancelled }

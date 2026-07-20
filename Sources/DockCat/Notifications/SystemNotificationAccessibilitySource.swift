@@ -19,7 +19,7 @@ import OSLog
     private let client: AccessibilityAPIClientProtocol
     private let dismissalRegistry: AccessibilityElementRegistry
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AccessibilityObserver")
-    private let eventHandler: @MainActor (NotificationSourceEvent) -> Void
+    private let eventHandler: @MainActor (NotificationSourceEvent, UInt64) -> Void
     private var outcomeHandler: @MainActor (Outcome) -> Void
     private var observer: (any AccessibilityObserverReference)?
     private var application: (any AccessibilityElementReference)?
@@ -28,6 +28,7 @@ import OSLog
     private var pendingSnapshots: [Int: Task<Void, Never>] = [:]
     private var sequence: UInt64 = 0
     private var started = false
+    private var generation: UInt64 = 0
 
     init(trust: AccessibilityTrustChecking = AccessibilityTrustController(), resolver: NotificationCenterProcessResolving = NotificationCenterProcessResolver(),
          client: AccessibilityAPIClientProtocol = AccessibilityAPIClient(),
@@ -35,11 +36,20 @@ import OSLog
          eventHandler: @escaping @MainActor (NotificationSourceEvent) -> Void,
          outcomeHandler: @escaping @MainActor (Outcome) -> Void) {
         self.trust = trust; self.resolver = resolver; self.client = client; self.dismissalRegistry = dismissalRegistry
-        self.eventHandler = eventHandler; self.outcomeHandler = outcomeHandler
+        self.eventHandler = { event, _ in eventHandler(event) }; self.outcomeHandler = outcomeHandler
+    }
+    init(trust: AccessibilityTrustChecking = AccessibilityTrustController(), resolver: NotificationCenterProcessResolving = NotificationCenterProcessResolver(),
+         client: AccessibilityAPIClientProtocol = AccessibilityAPIClient(),
+         dismissalRegistry: AccessibilityElementRegistry = AccessibilityElementRegistry(),
+         generatedEventHandler: @escaping @MainActor (NotificationSourceEvent, UInt64) -> Void,
+         outcomeHandler: @escaping @MainActor (Outcome) -> Void) {
+        self.trust = trust; self.resolver = resolver; self.client = client; self.dismissalRegistry = dismissalRegistry
+        self.eventHandler = generatedEventHandler; self.outcomeHandler = outcomeHandler
     }
     func setOutcomeHandler(_ handler: @escaping @MainActor (Outcome) -> Void) { outcomeHandler = handler }
-    func start() {
-        guard !started else { return }; started = true
+    func start() { start(generation: generation &+ 1) }
+    func start(generation: UInt64) {
+        guard !started else { return }; started = true; self.generation = generation
         logger.info("Accessibility source starting")
         guard trust.isTrusted() else { started = false; outcomeHandler(.permissionRequired); return }
         resolver.startMonitoring { [weak self] in self?.processChanged() }
@@ -89,10 +99,12 @@ import OSLog
     private func processChanged() { guard started else { return }; logger.info("Notification Center lifecycle event; resolving again"); attachResolvedProcess() }
     private func observed(_ changed: any AccessibilityElementReference, notification: String) {
         guard started else { return }; guard trust.isTrusted() else { stop(report: true); return }
+        let ownedGeneration = generation
         let elementIdentifier = changed.traversalIdentifier
         pendingSnapshots[elementIdentifier]?.cancel()
         pendingSnapshots[elementIdentifier] = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(40)); guard !Task.isCancelled, let self, let process else { return }
+            try? await Task.sleep(for: .milliseconds(40)); guard !Task.isCancelled, let self,
+                self.started, self.generation == ownedGeneration, let process else { return }
             let candidate = (try? client.element(.parent, of: changed)) ?? changed
             sequence &+= 1
             let kind = Self.kind(notification)
@@ -107,7 +119,7 @@ import OSLog
                 kind: kind, sequence: sequence, observedElementIdentifier: observedIdentifier,
                 opaqueDismissalTokenIdentifier: dismissalToken?.identifier)
             logger.info("AX candidate snapshot count=\(self.sequence, privacy: .public), truncations=\(result.truncatedNodeCount, privacy: .public)")
-            eventHandler(.accessibilitySnapshot(result.snapshot))
+            eventHandler(.accessibilitySnapshot(result.snapshot), ownedGeneration)
             pendingSnapshots[elementIdentifier] = nil
         }
     }

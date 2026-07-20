@@ -49,6 +49,66 @@ final class NotificationQueueTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(snapshot.count, 1)
     }
 
+    func testGlobalDisableClearIsAtomicIdempotentAndResetsPause() async {
+        let queue = DockCatCore.NotificationQueue()
+        let first = item("current"), second = item("pending")
+        _ = await queue.enqueue(first)
+        _ = await queue.enqueue(second)
+        _ = await queue.claimNext()
+        _ = await queue.setPaused(true)
+        let before = await queue.snapshot()
+
+        let clear = await queue.clearForGlobalDisable()
+        XCTAssertEqual(clear.removedCurrentID, first.id)
+        XCTAssertEqual(clear.removedPendingCount, 1)
+        XCTAssertEqual(clear.revision, before.revision + 1)
+        XCTAssertTrue(clear.didChange)
+        let cleared = await queue.snapshot()
+        XCTAssertFalse(cleared.isPaused)
+        XCTAssertEqual(cleared.count, 0)
+        guard case .idle(let revision) = await queue.claimNext() else {
+            return XCTFail("Cleared queue must be idle")
+        }
+        XCTAssertEqual(revision, clear.revision)
+
+        let repeated = await queue.clearForGlobalDisable()
+        XCTAssertFalse(repeated.didChange)
+        XCTAssertEqual(repeated.revision, clear.revision)
+    }
+
+    func testGlobalDisableClearPreservesRecentCompletionProtection() async {
+        let queue = DockCatCore.NotificationQueue(recentCompletionCapacity: 2)
+        let completed = item("completed")
+        _ = await queue.enqueue(completed)
+        _ = await queue.claimNext()
+        _ = await queue.completeCurrent(policy: .leavePendingForLater)
+        _ = await queue.enqueue(item("stale pending"))
+
+        let before = await queue.snapshot()
+        _ = await queue.clearForGlobalDisable()
+        let after = await queue.snapshot()
+        XCTAssertEqual(after.recentCompletionCount, before.recentCompletionCount)
+        let replay = await queue.enqueue(completed)
+        XCTAssertFalse(replay.wasAccepted)
+    }
+
+    func testRuntimeGenerationRejectsLateIngressAfterDisable() async {
+        let queue = DockCatCore.NotificationQueue()
+        await queue.activateRuntimeGeneration(7)
+        let active = await queue.enqueue(item("active"), runtimeGeneration: 7)
+        XCTAssertTrue(active.wasAccepted)
+        _ = await queue.clearForGlobalDisable()
+
+        let stale = await queue.enqueue(item("stale"), runtimeGeneration: 7)
+        XCTAssertFalse(stale.wasAccepted)
+        let staleSnapshot = await queue.snapshot()
+        XCTAssertEqual(staleSnapshot.count, 0)
+
+        await queue.activateRuntimeGeneration(9)
+        let fresh = await queue.enqueue(item("fresh"), runtimeGeneration: 9)
+        XCTAssertTrue(fresh.wasAccepted)
+    }
+
     func testCompletionAdvanceIsOneAtomicDecision() async {
         let queue = DockCatCore.NotificationQueue()
         let first = item("1"), second = item("2")

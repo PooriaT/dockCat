@@ -4,6 +4,12 @@ All inputs use a typed `NotificationSourceEvent`: existing developer and URL inp
 
 A source must validate at its trust boundary, avoid blocking the main actor, and submit only model values. No source may invoke presentation or animation directly.
 
+## Runtime gate
+
+System Notifications has three independent effective gates: the user's persisted request, global DockCat runtime allowance, and current Accessibility trust. Observation starts only when all three allow it. Global disable stops the source without changing the user's preference; health copy reports that observation is temporarily stopped rather than user-disabled. Re-enable starts a fresh source generation when the gates still allow it.
+
+Every source start and queue ingress carries a monotonically increasing runtime generation. Disable invalidates that generation before stopping observation and atomically clearing delivery work. Late AX snapshots, lifecycle reconciliation, dismissal requests, and source callbacks from an older generation are rejected, and source shutdown clears dismissal tokens plus external lifecycle tracking. No generation is derived from content or notification UUIDs.
+
 ## Experimental System Notifications onboarding
 
 The disabled-by-default observer uses only public Accessibility APIs. It resolves `com.apple.notificationcenterui` (plus a small legacy identifier/name fallback), listens for that process launching or terminating, and reattaches after PID replacement. It independently attempts created, children/layout/value changed, window-created, and destroyed callbacks because availability varies by macOS release. Partial registration is degraded; no useful registration is unavailable.
