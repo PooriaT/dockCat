@@ -36,7 +36,7 @@ final class CardAccessibilityAnnouncer {
 
     private let delivery: any CardAccessibilityAnnouncementDelivering
     private let logger = Logger(
-        subsystem: "com.example.DockCat", category: "CardAccessibility"
+        subsystem: DockCatProductIdentity.osLogSubsystem, category: "CardAccessibility"
     )
     private var pendingTask: Task<Void, Never>?
     private var pendingKey: Key?

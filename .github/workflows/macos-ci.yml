@@ -67,7 +67,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .ci-logs
-          swift test --parallel 2>&1 | tee .ci-logs/swift-test.log
+          { swift test --parallel
+            Scripts/validate-project-metadata.sh
+          } 2>&1 | tee .ci-logs/swift-test.log
 
       - name: Build DockCat app without signing
         run: |

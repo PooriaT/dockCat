@@ -20,7 +20,7 @@ private final class LiveSystemNotificationEventRouter: SystemNotificationSourceE
 
 @MainActor
 extension AppStateDependencies {
-    static func live(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.example.DockCat") -> AppStateDependencies {
+    static func live(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? DockCatProductIdentity.fallbackBundleIdentifier) -> AppStateDependencies {
         let settings = SettingsStore()
         let displayCatalog = DisplayCatalog()
         let queue = NotificationQueue()

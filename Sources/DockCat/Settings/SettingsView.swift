@@ -6,7 +6,9 @@ struct SettingsView: View {
     @ObservedObject var state: AppState
     @ObservedObject var menuBarVisibility: MenuBarVisibilityController
     let settingsPresenter: SettingsWindowPresenter
+    let diagnosticRecorder: DockCatDiagnosticEventRecorder
     @State private var tab = 0
+    @State private var diagnosticStatus: String?
 
     var body: some View {
         TabView(selection: $tab) {
@@ -146,7 +148,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }.padding().tabItem { Label("Animation", systemImage: "figure.walk") }.tag(4)
-            NotificationSimulatorView(state: state).padding().tabItem { Label("Developer", systemImage: "hammer") }.tag(5)
+            DeveloperDiagnosticsView(state: state, recorder: diagnosticRecorder, status: $diagnosticStatus).padding().tabItem { Label("Developer", systemImage: "hammer") }.tag(5)
         }
         .frame(width: 600, height: 580)
         .onDisappear { state.stopCalibrationPreview() }
@@ -370,7 +372,7 @@ private struct SystemNotificationsSettingsView: View {
 
     private var normalizedExclusion: String { DockCatPreferences.normalizeBundleIdentifier(exclusionIdentifier) }
     private var isOwnBundleIdentifier: Bool {
-        normalizedExclusion == DockCatPreferences.normalizeBundleIdentifier(Bundle.main.bundleIdentifier ?? "com.example.DockCat")
+        normalizedExclusion == DockCatPreferences.normalizeBundleIdentifier(Bundle.main.bundleIdentifier ?? DockCatProductIdentity.fallbackBundleIdentifier)
     }
     private func addExclusion() {
         guard !normalizedExclusion.isEmpty, !isOwnBundleIdentifier else { return }

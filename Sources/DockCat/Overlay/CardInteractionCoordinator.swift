@@ -12,7 +12,7 @@ final class CardInteractionCoordinator {
     private let focusController: any ApplicationFocusControlling
     private let urlOpener: any CardURLOpening
     private let logger = Logger(
-        subsystem: "com.example.DockCat", category: "CardInteraction"
+        subsystem: DockCatProductIdentity.osLogSubsystem, category: "CardInteraction"
     )
     private(set) var state = CardInteractionState()
     private var pendingRestoration: PendingRestoration?

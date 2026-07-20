@@ -6,6 +6,7 @@ import OSLog
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     let state = AppState(dependencies: .live())
+    let diagnosticRecorder = DockCatDiagnosticEventRecorder()
     lazy var settingsPresenter = SettingsWindowPresenter()
     lazy var menuBarVisibility = MenuBarVisibilityController(
         recoveryConfiguration: MenuBarRecoveryConfigurationVerifier(
@@ -24,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var bootstrapGuard = ApplicationBootstrapGuard()
     private var commandsAwaitingBootstrap: [DockCatURLCommand] = []
     private var menuBarVisibilityObservation: AnyCancellable?
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "Recovery")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "Recovery")
 
     override init() {
         super.init()

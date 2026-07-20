@@ -18,7 +18,7 @@ import OSLog
     private let resolver: NotificationCenterProcessResolving
     private let client: AccessibilityAPIClientProtocol
     private let dismissalRegistry: AccessibilityElementRegistry
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "AccessibilityObserver")
+    private let logger = Logger(subsystem: DockCatProductIdentity.osLogSubsystem, category: "AccessibilityObserver")
     private let eventHandler: @MainActor (NotificationSourceEvent, UInt64) -> Void
     private var outcomeHandler: @MainActor (Outcome) -> Void
     private var observer: (any AccessibilityObserverReference)?

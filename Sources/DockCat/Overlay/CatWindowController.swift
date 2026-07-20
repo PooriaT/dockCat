@@ -45,7 +45,7 @@ final class CatWindowController {
     private var motionResumeWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private lazy var motionDriver = CatMotionDriver(updater: panel)
     private let logger = Logger(
-        subsystem: "com.example.DockCat", category: "CatVisualPreferences"
+        subsystem: DockCatProductIdentity.osLogSubsystem, category: "CatVisualPreferences"
     )
 
     private func panelOrigin(forVisualAnchor anchor: CGPoint) -> CGPoint {

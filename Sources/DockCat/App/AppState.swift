@@ -502,7 +502,7 @@ final class AppState: ObservableObject {
                         token: request.tokenIdentifier, sourceBundleIdentifier: request.sourceBundleIdentifier,
                         notificationSubtreePath: request.notificationSubtreePath,
                         stableContainerIdentifier: request.stableContainerIdentifier, excluded: exclusions,
-                        ownBundleIdentifier: "com.example.DockCat"
+                        ownBundleIdentifier: Bundle.main.bundleIdentifier ?? DockCatProductIdentity.fallbackBundleIdentifier
                     )
                     logger.info("Native banner dismissal attempted")
                     if outcome == .permissionRequired {
@@ -1510,4 +1510,52 @@ final class AppState: ObservableObject {
             && machine.state == .waitingForDismissal
     }
 
+}
+
+struct AppStateDiagnosticProjection {
+    let runtime: DiagnosticRuntimeInfo
+    let sources: DiagnosticSourceInfo
+    let queue: DiagnosticQueueInfo
+    let presentation: DiagnosticPresentationInfo
+    let placement: DiagnosticPlacementInfo?
+    let accessibility: DiagnosticAccessibilityInfo
+    let queueRevision: UInt64
+}
+
+extension NotificationQueueSnapshot {
+    var diagnosticInfo: DiagnosticQueueInfo {
+        .init(currentExists: currentID != nil, pendingCount: pendingCount, queueLimit: limit, paused: isPaused, recentCompletionCount: recentCompletionCount, recentCompletionCapacity: recentCompletionCapacity)
+    }
+}
+
+@MainActor
+extension AppState {
+    func queueDiagnosticSnapshot() async -> NotificationQueueSnapshot { await queue.snapshot() }
+
+    func diagnosticProjection() async -> AppStateDiagnosticProjection {
+        let queueSnapshot = await queue.snapshot()
+        let session = presentation.snapshot()
+        let placementInfo = currentPlacement.map { placement in
+            DiagnosticPlacementInfo(
+                dockEdge: placement.edge.rawValue,
+                geometryConfidence: placement.geometryConfidence.rawValue,
+                screenFrame: .init(x: placement.screenFrame.origin.x, y: placement.screenFrame.origin.y, width: placement.screenFrame.size.width, height: placement.screenFrame.size.height),
+                visibleFrame: .init(x: placement.visibleScreenFrame.origin.x, y: placement.visibleScreenFrame.origin.y, width: placement.visibleScreenFrame.size.width, height: placement.visibleScreenFrame.size.height),
+                requestedDisplayAvailable: placement.requestedDisplayAvailable,
+                fallbackUsed: placement.usedDisplayFallback,
+                calibrationPresent: settings.preferences.calibration(for: placement.displayIdentity, edge: placement.edge) != nil,
+                displayToken: placement.displayIdentity.diagnosticsToken
+            )
+        }
+        let options = settings.accessibilityDisplayOptions.options
+        return .init(
+            runtime: .init(lifecycleMode: runtimeSnapshot.mode.rawValue, catState: catState.rawValue, effectiveVisualMode: runtimeSnapshot.visualMode.rawValue, deliveryPaused: runtimeSnapshot.mode == .deliveryPaused, transitioning: runtimeSnapshot.mode.isTransitioning, recovering: isRecovering, runtimeGeneration: runtimeGeneration, currentQueueRevision: queueSnapshot.revision),
+            sources: .init(internalTestAvailable: true, urlSourceAvailable: true, systemSourceRequested: runtimeSnapshot.systemSourceRequested, systemSourceHealth: systemAccess.health.state.rawValue, systemSourceReason: systemAccess.health.reason?.rawValue, nativeBannerCloseRequested: settings.preferences.closeNativeBannersAfterCapture, exclusionBundleIdentifierCount: settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers.count),
+            queue: queueSnapshot.diagnosticInfo,
+            presentation: .init(sessionExists: session != nil, sessionGeneration: session?.id.generation, phase: session?.phase.rawValue, contentRevision: session?.contentRevision, classification: session?.remainingTransientDuration == nil ? (session == nil ? nil : "persistent") : "transient", remainingTransientDurationSeconds: session?.remainingTransientDuration.map { max(0, Int(ceil(Double($0.components.seconds)))) }, dismissalCause: session?.dismissalCause?.rawValue, cancellationReason: session?.cancellationReason?.rawValue),
+            placement: placementInfo,
+            accessibility: .init(reduceMotion: options.reduceMotion, increasedContrast: options.increaseContrast, reduceTransparency: options.reduceTransparency, differentiateWithoutColor: options.differentiateWithoutColor, accessibilityTrusted: AXIsProcessTrusted()),
+            queueRevision: queueSnapshot.revision
+        )
+    }
 }
