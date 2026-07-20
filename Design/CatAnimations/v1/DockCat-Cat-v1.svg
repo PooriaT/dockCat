@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="220" viewBox="0 0 300 220" role="img" aria-label="DockCat orange cat editable source">
+  <g id="body" fill="#EB842A" stroke="#462C22" stroke-width="8" stroke-linejoin="round"><ellipse cx="130" cy="132" rx="53" ry="32"/><ellipse id="belly" cx="143" cy="136" rx="28" ry="17" fill="#FFD891" stroke="none"/></g>
+  <g id="tail" fill="none" stroke-linecap="round"><path d="M78 130 C48 118 39 98 60 82" stroke="#462C22" stroke-width="16"/><path d="M78 130 C48 118 39 98 60 82" stroke="#FAAA4E" stroke-width="10"/></g>
+  <g id="head" fill="#EB842A" stroke="#462C22" stroke-width="8" stroke-linejoin="round"><path id="left-ear" d="M138 74 L148 40 L162 72 Z"/><path id="right-ear" d="M190 74 L204 40 L212 77 Z"/><ellipse cx="170" cy="94" rx="40" ry="31"/></g>
+  <g id="eyes" fill="#462C22"><ellipse cx="159" cy="89" rx="4" ry="6"/><ellipse cx="184" cy="89" rx="4" ry="6"/></g>
+  <g id="face" stroke="#462C22" stroke-width="3" stroke-linecap="round"><ellipse cx="183" cy="104" rx="15" ry="10" fill="#FFD891" stroke="none"/><ellipse cx="173" cy="100" rx="3" ry="2" fill="#EE7D7E" stroke="none"/><path d="M172 104 L165 110 M174 104 L181 110" fill="none"/></g>
+  <g id="paws" fill="#FAAA4E" stroke="#462C22" stroke-width="6"><ellipse cx="104" cy="160" rx="14" ry="8"/><ellipse cx="145" cy="160" rx="14" ry="8"/><ellipse id="carry-paw-left" cx="214" cy="145" rx="12" ry="7"/><ellipse id="carry-paw-right" cx="244" cy="148" rx="10" ry="6"/></g>
+  <g id="markings" stroke="#BE5E21" stroke-width="5" stroke-linecap="round"><path d="M156 70 L151 83 M170 68 L165 82 M184 70 L179 83 M105 108 L98 125 M122 106 L115 124 M139 108 L132 125"/></g>
+  <g id="anchors" fill="none" stroke="#3B82F6" stroke-width="1" opacity="0.35"><circle id="visual-feet-anchor" cx="150" cy="150" r="4"/><circle id="carry-anchor" cx="234" cy="146" r="4"/><rect id="handoff-size" x="198" y="122" width="72" height="48"/></g>
+</svg>
