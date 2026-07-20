@@ -332,10 +332,14 @@ final class CatScene: SKScene {
         completion: @escaping @MainActor () -> Void
     ) -> Bool {
         guard let clipLibrary else { return false }
+        let isStaticCarry: Bool
         if case .walkToPresentationLoop(let context) = animation {
-            if preferences.mode == .walkingDisabled || context.phase == .staticCarry {
+            isStaticCarry = context.phase == .staticCarry
+            if preferences.mode == .walkingDisabled {
                 applyFinalState(for: animation); completion(); return true
             }
+        } else {
+            isStaticCarry = false
         }
         let clip = clipLibrary[clipID]
         guard let atlasSprite else { return false }
@@ -343,7 +347,7 @@ final class CatScene: SKScene {
         applyFinalState(for: animation)
         let finalTexture = clip.textures.last ?? atlasSprite.texture
         if clip.playback != .loop { poseRoot.removeAction(forKey: ActionKey.spriteLoop) }
-        if preferences.mode == .animationsPaused || preferences.mode == .reducedMotion || clip.textures.count <= 1 {
+        if preferences.mode == .animationsPaused || preferences.mode == .reducedMotion || isStaticCarry || clip.textures.count <= 1 {
             atlasSprite.texture = finalTexture
             completion(); return true
         }
