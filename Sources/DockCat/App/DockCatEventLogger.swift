@@ -25,7 +25,7 @@ final class OSLogDockCatEventLogger: DockCatEventLogging {
         record(.effect, outcome: .started, detail: effect.rawValue)
     }
 
-    func catTransitionRejected(state: CatState, event: CatEvent, reason: CatTransitionRejection.Reason) {
+    func catTransitionRejected(state: CatState, event: CatEvent, reason: CatTransitionRejectionReason) {
         logger.error("Cat transition rejected state=\(state.rawValue, privacy: .public) event=\(event.rawValue, privacy: .public) reason=\(reason.rawValue, privacy: .public) recovery=true")
         record(.catTransition, outcome: .rejected, detail: reason.rawValue)
     }

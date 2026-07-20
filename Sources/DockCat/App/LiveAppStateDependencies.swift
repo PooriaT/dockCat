@@ -26,7 +26,7 @@ extension AppStateDependencies {
     ) -> AppStateDependencies {
         let settings = SettingsStore()
         let displayCatalog = DisplayCatalog()
-        let queue = NotificationQueue()
+        let queue = DockCatCore.NotificationQueue()
         let registry = AccessibilityElementRegistry()
         let eventRouter = LiveSystemNotificationEventRouter()
         let source = SystemNotificationAccessibilitySource(dismissalRegistry: registry, generatedEventHandler: { event, generation in eventRouter.emit(event, generation: generation) }, outcomeHandler: { outcome in eventRouter.emit(outcome) })

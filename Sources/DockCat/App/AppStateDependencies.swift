@@ -2,6 +2,8 @@ import AppKit
 import DockCatCore
 import Foundation
 
+typealias DockCatNotificationQueue = DockCatCore.NotificationQueue
+
 @MainActor
 protocol DockCatSettingsProviding: AnyObject {
     var preferences: DockCatPreferences { get set }
@@ -12,15 +14,15 @@ protocol DockCatSettingsProviding: AnyObject {
 protocol NotificationQueueing: Sendable {
     func snapshot() async -> NotificationQueueSnapshot
     func activateRuntimeGeneration(_ generation: UInt64) async
-    func enqueue(_ notification: DockCatNotification, runtimeGeneration generation: UInt64) async -> NotificationQueue.EnqueueResult
-    func enqueueAppeared(_ notification: DockCatNotification, runtimeGeneration generation: UInt64) async -> NotificationQueue.ExternalMutationResult
-    func updateExternal(_ notification: DockCatNotification, runtimeGeneration generation: UInt64) async -> NotificationQueue.ExternalMutationResult
-    func removeExternal(_ identity: ExternalNotificationIdentity, runtimeGeneration generation: UInt64) async -> NotificationQueue.ExternalMutationResult
-    func claimNext() async -> NotificationQueue.ClaimResult
-    func completeCurrent(policy: NotificationQueue.CompletionPolicy) async -> NotificationQueue.CompletionResult
-    func setPaused(_ value: Bool) async -> NotificationQueue.PauseResult
-    func setLimit(_ value: Int, runtimeGeneration generation: UInt64) async -> NotificationQueue.LimitResult
-    func clearForGlobalDisable() async -> NotificationQueue.ClearResult
+    func enqueue(_ notification: DockCatNotification, runtimeGeneration generation: UInt64) async -> DockCatNotificationQueue.EnqueueResult
+    func enqueueAppeared(_ notification: DockCatNotification, runtimeGeneration generation: UInt64) async -> DockCatNotificationQueue.ExternalMutationResult
+    func updateExternal(_ notification: DockCatNotification, runtimeGeneration generation: UInt64) async -> DockCatNotificationQueue.ExternalMutationResult
+    func removeExternal(_ identity: ExternalNotificationIdentity, runtimeGeneration generation: UInt64) async -> DockCatNotificationQueue.ExternalMutationResult
+    func claimNext() async -> DockCatNotificationQueue.ClaimResult
+    func completeCurrent(policy: DockCatNotificationQueue.CompletionPolicy) async -> DockCatNotificationQueue.CompletionResult
+    func setPaused(_ value: Bool) async -> DockCatNotificationQueue.PauseResult
+    func setLimit(_ value: Int, runtimeGeneration generation: UInt64) async -> DockCatNotificationQueue.LimitResult
+    func clearForGlobalDisable() async -> DockCatNotificationQueue.ClearResult
 }
 
 @MainActor
@@ -110,7 +112,7 @@ protocol DisplayCatalogProviding: AnyObject { var onChange: (@MainActor () -> Vo
 protocol DockCatEventLogging: AnyObject {
     func runtimeTransition(previous: DockCatRuntimeMode, next: DockCatRuntimeMode, generation: UInt64)
     func catTransition(previous: CatState, event: CatEvent, next: CatState, effect: CatCoordinatorEffect)
-    func catTransitionRejected(state: CatState, event: CatEvent, reason: CatTransitionRejection.Reason)
+    func catTransitionRejected(state: CatState, event: CatEvent, reason: CatTransitionRejectionReason)
     func staleCallbackRejected(category: String)
     func recovery(context: String, previous: CatState, safe: CatState)
     func info(_ message: String)
@@ -142,7 +144,7 @@ struct AppStateDependencies {
     let retainedObjects: [AnyObject]
 }
 
-extension NotificationQueue: NotificationQueueing {}
+extension DockCatNotificationQueue: NotificationQueueing {}
 extension SettingsStore: DockCatSettingsProviding {}
 extension CatWindowController: CatVisualDriving {}
 extension CardWindowController: CardPresenting {}

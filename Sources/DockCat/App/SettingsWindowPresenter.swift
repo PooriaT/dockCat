@@ -1,4 +1,5 @@
 import AppKit
+import DockCatCore
 import OSLog
 
 enum SettingsOpenRequestSource: String, Equatable, Sendable {
