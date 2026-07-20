@@ -31,12 +31,12 @@ final class CatAnimationAtlasLoaderTests: XCTestCase {
     func testSceneUsesTypedClipWhenLibraryInjectedAndFallbackStillRuns() async throws {
         guard case .loaded(let library) = CatAnimationAtlasLoader(locator: FixtureLocator(manifest: Self.manifest())).load() else { return XCTFail("load") }
         let scene = CatScene(size: CGSize(width: 150, height: 110), artworkLoadResult: .loaded(library))
-        let result = await scene.runAsync(.wake, duration: 0.1, preferences: .default)
+        let result = await scene.runAsync(.wake, duration: 0.1, preferences: Self.reducedMotionPreferences)
         XCTAssertEqual(result, .completed)
         XCTAssertEqual(scene.currentSpriteClipIDForTesting, .wake)
         let fallback = CatScene(size: CGSize(width: 150, height: 110), artworkLoadResult: .unavailableOptionalAtlas)
         XCTAssertFalse(fallback.usesSpriteAtlasForTesting)
-        let fallbackResult = await fallback.runAsync(.wake, duration: 0.01, preferences: .default)
+        let fallbackResult = await fallback.runAsync(.wake, duration: 0.01, preferences: Self.animationsPausedPreferences)
         XCTAssertEqual(fallbackResult, .completed)
     }
 
@@ -44,11 +44,12 @@ final class CatAnimationAtlasLoaderTests: XCTestCase {
         guard case .loaded(let library) = CatAnimationAtlasLoader(locator: FixtureLocator(manifest: Self.manifest())).load() else { return XCTFail("load") }
         let scene = CatScene(size: CGSize(width: 150, height: 110), artworkLoadResult: .loaded(library))
         let context = CatAnimationContext(dockEdge: .bottom, direction: .right, purpose: .presentation, phase: .staticCarry, facing: .right, isCarryingMiniCard: true, reducedMotion: true)
-        let preferences = EffectiveAnimationPreferences(inputs: .init(appReducedMotion: true, systemReducedMotion: false, disableWalking: false, pauseAnimations: false, idleAnimation: true, animationSpeed: 1, catScale: 1))
-        let result = await scene.runAsync(.walkToPresentationLoop(context), duration: 0.01, preferences: preferences)
+        let result = await scene.runAsync(.walkToPresentationLoop(context), duration: 0.01, preferences: Self.reducedMotionPreferences)
         XCTAssertEqual(result, .completed)
         XCTAssertEqual(scene.currentSpriteClipIDForTesting, .walkCarry)
     }
+    static let reducedMotionPreferences = EffectiveAnimationPreferences(inputs: .init(appReducedMotion: true, systemReducedMotion: false, disableWalking: false, pauseAnimations: false, idleAnimation: true, animationSpeed: 1, catScale: 1))
+    static let animationsPausedPreferences = EffectiveAnimationPreferences(inputs: .init(appReducedMotion: false, systemReducedMotion: false, disableWalking: false, pauseAnimations: true, idleAnimation: true, animationSpeed: 1, catScale: 1))
     static func manifest(atlasName: String = "TestCat") -> CatAnimationAtlasManifest { Self.valid(atlasName: atlasName, clips: CatAnimationClipID.allCases.map { id in Self.clip(id, frames: id == .wake ? ["wake_0", "wake_1"] : ["\(id.rawValue)_0"]) }) }
     static func valid(atlasName: String = "TestCat", clips: [CatAnimationClipManifest]) -> CatAnimationAtlasManifest { .init(schemaVersion: 1, assetSetID: "dockcat-test", assetSetVersion: "1", atlasName: atlasName, logicalCanvasSize: Size(width: 150, height: 110), nativeScale: 2, anchors: .init(visualAnchor: Point(x: 75, y: 35), feetAnchor: Point(x: 75, y: 35), carryAnchor: Point(x: 117, y: 73), handoffSize: Size(width: 36, height: 24)), orientationPolicy: .canonicalRightFacingMirrorLeftRotateVertical, clips: clips) }
     static func clip(_ id: CatAnimationClipID, frames: [String]) -> CatAnimationClipManifest { .init(id: id, frameNames: frames, secondsPerFrame: 0.1, playback: ([.sleep,.walkCarry,.wait,.walkHome].contains(id) ? .loop : .once), restorePolicy: .preserveFinalFrame) }
