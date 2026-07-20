@@ -1,5 +1,7 @@
 # DockCat
 
+[![macOS CI](https://github.com/PooriaT/dockCat/actions/workflows/macos-ci.yml/badge.svg)](https://github.com/PooriaT/dockCat/actions/workflows/macos-ci.yml)
+
 > The experimental System Notifications integration includes an independently opt-in, disabled-by-default best-effort operation to close an original banner *after* DockCat accepts its mirror. It does not prevent native banners: they may appear briefly or remain, and compatibility may change with macOS updates. Detection fails closed, executes no content actions, and bundle-identifier exclusions do not affect mirroring.
 
 DockCat is a native macOS 14+ menu-bar app that places a small animated cat beside the Dock. Internal notifications wake the cat, send it toward the Dock centre with a card, and return it home when the queue becomes idle.
@@ -24,12 +26,38 @@ DockCat does not currently mirror other apps' notifications. Settings includes a
 
 Open `DockCat.xcodeproj`, select the DockCat scheme, choose your signing team if required, and Run. DockCat is an accessory app and has no normal Dock icon. Use its paw menu-bar item, Finder/open-app reopen, or one of the recovery paths below to reach Settings.
 
-From Terminal:
+From Terminal, run the same package test command used by CI:
 
 ```sh
-swift build
-swift test
+swift test --parallel
 ```
+
+To verify that the Xcode application target compiles without a personal signing identity, run:
+
+```sh
+xcodebuild \
+  -project DockCat.xcodeproj \
+  -scheme DockCat \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath .local-derived-data \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY='' \
+  build
+```
+
+Or run both checks with:
+
+```sh
+Scripts/ci-local.sh
+```
+
+The local script prints the active Swift and Xcode versions, validates the committed shared `DockCat` scheme, writes logs under `.ci-logs/`, writes the Xcode result bundle under `.ci-results/`, and keeps local DerivedData under `.local-derived-data/`. Passing a path argument changes the output root for those generated verification files.
+
+GitHub Actions runs `.github/workflows/macos-ci.yml` on `macos-15` and explicitly selects `/Applications/Xcode_26.2.app/Contents/Developer`, matching the stable Xcode 26.2 installation listed for the macOS 15 runner image. The CI build disables code signing and proves Debug compilation only; it does not sign, notarize, publish, or upload a distributable app. Running from Xcode locally may still require selecting a personal development team for interactive Run/archive workflows. On CI failure, downloadable artifacts retain the Swift test log, Xcode build log, environment summary, and generated `.xcresult` bundle for about seven days.
+
+The package has no external dependency graph today, so CI intentionally does not cache `.build`, DerivedData, object files, modules, or binaries. Signing, notarization, release distribution, coordinator injection, product metadata, and diagnostics are deferred to later work.
 
 ## URL examples
 
