@@ -67,7 +67,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .ci-logs
-          { swift test --parallel
+          { Scripts/validate-cat-animation-assets.sh
+          swift test --parallel
             Scripts/validate-project-metadata.sh
           } 2>&1 | tee .ci-logs/swift-test.log
 
