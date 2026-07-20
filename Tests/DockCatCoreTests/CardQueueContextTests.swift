@@ -22,13 +22,14 @@ final class CardQueueContextTests: XCTestCase, @unchecked Sendable {
         )
     }
 
-    func testPauseCopyAppearsOnlyWithPendingItems() {
+    func testPauseCopyRemainsVisibleWithOrWithoutPendingItems() {
         XCTAssertEqual(
             CardQueueContext(pendingCount: 2, isDeliveryPaused: true).visibleText,
-            "2 waiting · delivery paused"
+            "2 additional notifications waiting · delivery paused"
         )
-        XCTAssertNil(
-            CardQueueContext(pendingCount: 0, isDeliveryPaused: true).visibleText
+        XCTAssertEqual(
+            CardQueueContext(pendingCount: 0, isDeliveryPaused: true).visibleText,
+            "Delivery paused"
         )
     }
 

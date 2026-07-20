@@ -40,14 +40,20 @@ struct NotificationCardView: View {
     private enum FocusedControl: Hashable {
         case open
         case close
+        case message
     }
 
     let content: NotificationCardContent
+    let accessibility: NotificationCardAccessibilityModel
+    let accessibilityAppearance: CardAccessibilityAppearance
+    let isInteractive: Bool
     let actionURL: URL?
     let cardWidth: CGFloat
     let layoutPlan: CardContentLayoutPlan
     let interactionFocusGeneration: UInt64?
+    let preferredFocusTarget: CardKeyboardTarget?
     let measurementsChanged: (CardContentRegionMeasurements) -> Void
+    let focusChanged: (CardKeyboardTarget?) -> Void
     let requestInteraction: (CardInteractionTrigger) -> Void
     let closeRequested: () -> Void
     let openRequested: (URL) -> Void
@@ -55,6 +61,48 @@ struct NotificationCardView: View {
     @FocusState private var focusedControl: FocusedControl?
 
     var body: some View {
+        measuredCard
+    }
+
+    private var interactiveCard: some View {
+        surfacedCard
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(NotificationCardAccessibilityIdentifier.container.rawValue)
+            .accessibilityAction(named: "Interact with notification") {
+                requestInteraction(.accessibility)
+            }
+            .onKeyPress(keys: [.tab]) { press in
+                moveKeyboardFocus(reverse: press.modifiers.contains(.shift))
+            }
+            .onAppear { applyInitialFocusIfRequested() }
+            .onChange(of: interactionFocusGeneration) {
+                applyInitialFocusIfRequested()
+            }
+            .onChange(of: focusedControl) {
+                focusChanged(currentKeyboardTarget)
+            }
+    }
+
+    private var measuredCard: some View {
+        interactiveCard
+            .onPreferenceChange(CardRegionHeightPreference.self) { heights in
+                measurementsChanged(.init(
+                    headerHeight: Double(heights[.header] ?? 0),
+                    titleHeight: Double(heights[.title] ?? 0),
+                    bodyHeight: Double(heights[.body] ?? 0),
+                    actionsHeight: Double(heights[.actions] ?? 0),
+                    queueFooterHeight: Double(heights[.queueFooter] ?? 0)
+                ))
+            }
+    }
+
+    private var surfacedCard: some View {
+        cardLayout
+            .background { cardBackground }
+            .overlay { cardBorder }
+    }
+
+    private var cardLayout: some View {
         VStack(alignment: .leading, spacing: CGFloat(CardContentLayoutMetrics.standard.interSectionSpacing)) {
             header
 
@@ -64,6 +112,9 @@ struct NotificationCardView: View {
                     .lineLimit(layoutPlan.titleLineLimit)
                     .fixedSize(horizontal: false, vertical: true)
                     .layoutPriority(2)
+                    .accessibilityIdentifier(NotificationCardAccessibilityIdentifier.title.rawValue)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilitySortPriority(50)
                     .reportCardHeight(.title)
             }
 
@@ -71,29 +122,31 @@ struct NotificationCardView: View {
                 messageRegion
             }
 
-            if content.hasOpenAction, let actionURL {
-                Button("Open") {
-                    openRequested(actionURL)
-                }
-                .focused($focusedControl, equals: .open)
-                .accessibilityIdentifier("dockcat.card.open")
-                .accessibilityHint("Opens the notification link in your browser")
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(3)
-                .reportCardHeight(.actions)
-            }
-
-            if let queueText = content.queueContext.visibleText {
+            if let queueText = content.queueContext.visibleText,
+               let queueLabel = accessibility.queueLabel {
                 Label(queueText, systemImage: "tray.full")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .padding(.top, CGFloat(
                         CardContentLayoutMetrics.standard.queueFooterSpacing
                         - CardContentLayoutMetrics.standard.interSectionSpacing
                     ))
                     .fixedSize(horizontal: false, vertical: true)
                     .layoutPriority(3)
+                    .accessibilityIdentifier(NotificationCardAccessibilityIdentifier.queue.rawValue)
+                    .accessibilityLabel(queueLabel)
+                    .accessibilitySortPriority(30)
                     .reportCardHeight(.queueFooter)
+            }
+
+            if content.hasOpenAction || content.canDismiss {
+                actions
+                    .overlay(alignment: .top) {
+                        if accessibilityAppearance.showsDivider {
+                            Divider().offset(y: -4)
+                        }
+                    }
+                    .reportCardHeight(.actions)
             }
         }
         .padding(.horizontal, CGFloat(CardContentLayoutMetrics.standard.horizontalPadding))
@@ -103,47 +156,32 @@ struct NotificationCardView: View {
             height: CGFloat(layoutPlan.cardSize.height),
             alignment: .topLeading
         )
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.2)))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("dockcat.card")
-        .accessibilityLabel("DockCat notification from \(content.sourceName)")
-        .accessibilityAction(named: "Interact with notification") {
-            requestInteraction(.accessibility)
-        }
-        .onAppear { applyInitialFocusIfRequested() }
-        .onChange(of: interactionFocusGeneration) {
-            applyInitialFocusIfRequested()
-        }
-        .onPreferenceChange(CardRegionHeightPreference.self) { heights in
-            measurementsChanged(.init(
-                headerHeight: Double(heights[.header] ?? 0),
-                titleHeight: Double(heights[.title] ?? 0),
-                bodyHeight: Double(heights[.body] ?? 0),
-                actionsHeight: Double(heights[.actions] ?? 0),
-                queueFooterHeight: Double(heights[.queueFooter] ?? 0)
-            ))
-        }
     }
 
     private var header: some View {
-        HStack {
+        HStack(alignment: .top) {
             Image(systemName: "pawprint.fill")
                 .foregroundStyle(.orange)
-            Text(content.sourceName)
-                .font(.caption)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(content.sourceName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .accessibilityIdentifier(NotificationCardAccessibilityIdentifier.source.rawValue)
+                    .accessibilityValue(CardAccessibilityCopy.sourceValue)
+                    .accessibilitySortPriority(70)
+                Label(
+                    content.presentation == .persistent ? "Persistent" : "Closes automatically",
+                    systemImage: content.presentation == .persistent ? "pin.fill" : "clock"
+                )
+                .font(.caption2)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer()
-            if content.canDismiss {
-                Button(action: closeRequested) {
-                    Image(systemName: "xmark.circle.fill")
-                }
-                .buttonStyle(.plain)
-                .focused($focusedControl, equals: .close)
-                .accessibilityIdentifier("dockcat.card.close")
-                .accessibilityLabel("Dismiss notification")
+                .accessibilityIdentifier(NotificationCardAccessibilityIdentifier.behavior.rawValue)
+                .accessibilityLabel(accessibility.behaviorLabel)
+                .accessibilitySortPriority(60)
             }
+            Spacer()
         }
         .fixedSize(horizontal: false, vertical: true)
         .layoutPriority(3)
@@ -157,6 +195,8 @@ struct NotificationCardView: View {
                 messageText
             }
             .frame(height: CGFloat(layoutPlan.bodyViewportHeight))
+            .focusable(isInteractive)
+            .focused($focusedControl, equals: .message)
         } else {
             messageText
         }
@@ -169,7 +209,58 @@ struct NotificationCardView: View {
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)
+            .accessibilityIdentifier(NotificationCardAccessibilityIdentifier.message.rawValue)
+            .accessibilitySortPriority(40)
             .reportCardHeight(.body)
+    }
+
+    private var actions: some View {
+        HStack {
+            if let openControl = accessibility.openControl,
+               content.hasOpenAction,
+               let actionURL {
+                Button("Open") { openRequested(actionURL) }
+                    .focused($focusedControl, equals: .open)
+                    .accessibilityIdentifier(openControl.identifier)
+                    .accessibilityLabel(openControl.label)
+                    .accessibilityHint(openControl.hint)
+                    .accessibilitySortPriority(20)
+            }
+            Spacer()
+            if let closeControl = accessibility.closeControl, content.canDismiss {
+                Button(action: closeRequested) {
+                    Label("Dismiss", systemImage: "xmark.circle.fill")
+                }
+                .focused($focusedControl, equals: .close)
+                .accessibilityIdentifier(closeControl.identifier)
+                .accessibilityLabel(closeControl.label)
+                .accessibilityHint(closeControl.hint)
+                .accessibilitySortPriority(10)
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(accessibilityAppearance.focusEmphasis == .increased ? .regular : .small)
+        .fixedSize(horizontal: false, vertical: true)
+        .layoutPriority(3)
+    }
+
+    @ViewBuilder
+    private var cardBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: 16)
+        switch accessibilityAppearance.backgroundStyle {
+        case .material:
+            shape.fill(.regularMaterial)
+        case .opaqueSystem:
+            shape.fill(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
+    private var cardBorder: some View {
+        RoundedRectangle(cornerRadius: 16)
+            .stroke(
+                Color(nsColor: .separatorColor),
+                lineWidth: CGFloat(accessibilityAppearance.borderWidth)
+            )
     }
 
     private func applyInitialFocusIfRequested() {
@@ -177,14 +268,56 @@ struct NotificationCardView: View {
             focusedControl = nil
             return
         }
-        switch CardInitialFocusTarget.resolve(
+        let available = CardKeyboardOrder.forward(
+            isInteractive: true,
             hasOpenAction: content.hasOpenAction,
             canDismiss: content.canDismiss,
-            bodySupportsKeyboardScrolling: false
-        ) {
+            bodySupportsKeyboardScrolling: layoutPlan.bodyScrolls
+        )
+        let target = preferredFocusTarget.flatMap { available.contains($0) ? $0 : nil }
+        switch target ?? CardInitialFocusTarget.resolve(
+            hasOpenAction: content.hasOpenAction,
+            canDismiss: content.canDismiss,
+            bodySupportsKeyboardScrolling: layoutPlan.bodyScrolls
+        ).map(CardKeyboardTarget.init) {
         case .open: focusedControl = .open
         case .close: focusedControl = .close
-        case .message, nil: focusedControl = nil
+        case .message: focusedControl = .message
+        case nil: focusedControl = nil
         }
+    }
+
+    private var currentKeyboardTarget: CardKeyboardTarget? {
+        switch focusedControl {
+        case .open: .open
+        case .close: .close
+        case .message: .message
+        case nil: nil
+        }
+    }
+
+    private func moveKeyboardFocus(reverse: Bool) -> KeyPress.Result {
+        let order = CardKeyboardOrder.forward(
+            isInteractive: isInteractive,
+            hasOpenAction: content.hasOpenAction,
+            canDismiss: content.canDismiss,
+            bodySupportsKeyboardScrolling: layoutPlan.bodyScrolls
+        )
+        guard !order.isEmpty else { return .ignored }
+        let current = currentKeyboardTarget
+        let currentIndex = current.flatMap(order.firstIndex(of:))
+        let nextIndex: Int
+        if reverse {
+            nextIndex = currentIndex.map { ($0 - 1 + order.count) % order.count }
+                ?? order.count - 1
+        } else {
+            nextIndex = currentIndex.map { ($0 + 1) % order.count } ?? 0
+        }
+        switch order[nextIndex] {
+        case .open: focusedControl = .open
+        case .close: focusedControl = .close
+        case .message: focusedControl = .message
+        }
+        return .handled
     }
 }

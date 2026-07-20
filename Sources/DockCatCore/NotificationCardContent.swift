@@ -13,13 +13,17 @@ public struct CardQueueContext: Equatable, Sendable {
         self.isDeliveryPaused = isDeliveryPaused
     }
 
-    public var isVisible: Bool { pendingCount > 0 }
+    public var isVisible: Bool { pendingCount > 0 || isDeliveryPaused }
 
     /// Deterministic English copy. Full localization is intentionally deferred.
     public var visibleText: String? {
-        guard pendingCount > 0 else { return nil }
+        guard isVisible else { return nil }
+        if pendingCount == 0 { return "Delivery paused" }
         if isDeliveryPaused {
-            return "\(pendingCount) waiting · delivery paused"
+            let waiting = pendingCount == 1
+                ? "1 additional notification waiting"
+                : "\(pendingCount) additional notifications waiting"
+            return "\(waiting) · delivery paused"
         }
         let count = pendingCount == 1
             ? "1 more notification"

@@ -65,6 +65,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
 
     private let panel = CardOverlayPanel()
     private let interactionCoordinator = CardInteractionCoordinator()
+    private let accessibilityAnnouncer: CardAccessibilityAnnouncer
     private let logger = Logger(subsystem: "com.example.DockCat", category: "CardPlacement")
     private var placementContext: CardPlacementContext?
     private var logicalPlacement: CatLogicalPlacement = .home
@@ -76,6 +77,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     private var installedContent: InstalledContent?
     private var installedSessionID: PresentationSessionID?
     private var interactionFocusGeneration: UInt64?
+    private var keyboardFocusTarget: CardKeyboardTarget?
     private weak var hostingView: CardHostingView?
     private var queueContext: CardQueueContext = .empty
     private var queueContextRevision: NotificationQueueRevision = 0
@@ -102,13 +104,21 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     private var currentVisualOperation: VisualOperation?
     private var currentOperationUsesReducedMotion = false
     private var visualPreferences: EffectiveAnimationPreferences = .default
+    private var accessibilityDisplayOptions: AccessibilityDisplayOptions = .standard
     private var dismissalSourceRect: CGRect?
     private var pendingAnimation: PendingAnimation?
     private var suppressCloseCallback = false
     var onDismiss: (() -> Void)?
     var validateInteractionSession: ((PresentationSessionID) -> Bool)?
 
-    override init() {
+    override convenience init() {
+        self.init(accessibilityAnnouncementDelivery: AppKitCardAccessibilityAnnouncementDelivery())
+    }
+
+    init(accessibilityAnnouncementDelivery: any CardAccessibilityAnnouncementDelivering) {
+        accessibilityAnnouncer = CardAccessibilityAnnouncer(
+            delivery: accessibilityAnnouncementDelivery
+        )
         super.init()
         panel.delegate = self
         interactionCoordinator.onDismissRequested = { [weak self] in
@@ -202,7 +212,44 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Appearance-only refresh. It neither begins a visual operation nor changes session,
+    /// queue, content revision, placement, or transient timing.
+    func applyAccessibilityDisplayOptions(_ options: AccessibilityDisplayOptions) {
+        guard options != accessibilityDisplayOptions else { return }
+        accessibilityDisplayOptions = options
+        logger.info(
+            "Accessibility options changed reduceMotion=\(options.reduceMotion, privacy: .public) increaseContrast=\(options.increaseContrast, privacy: .public) reduceTransparency=\(options.reduceTransparency, privacy: .public) differentiateWithoutColor=\(options.differentiateWithoutColor, privacy: .public)"
+        )
+        panel.hasShadow = !options.increaseContrast
+        guard installedContent != nil else { return }
+        refreshHostedInteractionState()
+    }
+
+    func announceStableCard(
+        sessionID: PresentationSessionID,
+        contentRevision: UInt64,
+        category: CardAccessibilityAnnouncementCategory
+    ) {
+        guard panel.isVisible,
+              installedSessionID == sessionID,
+              let installedContent else {
+            accessibilityAnnouncer.cancelPending(reason: "stale-session")
+            return
+        }
+        let content = makeCardContent(
+            notification: installedContent.notification,
+            preferences: installedContent.preferences
+        )
+        accessibilityAnnouncer.announceStable(
+            model: .init(content: content),
+            sessionID: sessionID,
+            contentRevision: contentRevision,
+            category: category
+        )
+    }
+
     func forceHide(exit: CardInteractionExit = .globalDisable) {
+        accessibilityAnnouncer.cancelPending(reason: exit.rawValue)
         cancelPresentationAnimation()
         hostingModelRevision &+= 1
         pendingRegionMeasurement = nil
@@ -212,6 +259,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             )
         }
         interactionFocusGeneration = nil
+        keyboardFocusTarget = nil
         panel.returnToPassiveMode()
         suppressCloseCallback = true
         panel.orderOut(nil)
@@ -315,6 +363,23 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             currentVisualOperation = nil
             return .completed
         }
+        if reducedMotion {
+            install(notification: notification, preferences: preferences)
+            _ = resolveStableFrame()
+            applyStableFrame()
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            // Let SwiftUI's coalesced semantic-region measurement install its valid final
+            // frame without introducing a fade or spatial transition.
+            await withCheckedContinuation {
+                (continuation: CheckedContinuation<Void, Never>) in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+            applyStableFrame()
+            currentOperationID = nil
+            currentVisualOperation = nil
+            return .completed
+        }
         let fadeOut = await animate(id: id, duration: reducedMotion ? 0.10 : 0.16) { [panel] in
             panel.animator().alphaValue = 0.15
         } cancel: { [panel] in
@@ -358,6 +423,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         visualPreferences: EffectiveAnimationPreferences,
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
+        accessibilityAnnouncer.cancelPending(reason: "dismissal")
         self.visualPreferences = visualPreferences
         let reducedMotion = Self.usesReducedMotionForCardAnimations(visualPreferences)
         let id = beginOperation(
@@ -407,6 +473,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             exit, for: sessionID, panelIsKey: panel.isKeyWindow
         )
         interactionFocusGeneration = nil
+        keyboardFocusTarget = nil
         panel.returnToPassiveMode()
     }
 
@@ -461,11 +528,17 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         recalculateLayoutPlan()
         hostingModelRevision &+= 1
         let view = makeCardView(notification: notification, preferences: preferences)
-        let hosting = CardHostingView(rootView: view)
-        hosting.frame = CGRect(origin: .zero, size: measuredCardSize)
-        panel.contentView = hosting
-        hosting.layoutSubtreeIfNeeded()
-        hostingView = hosting
+        if let hostingView {
+            hostingView.rootView = view
+            hostingView.frame = CGRect(origin: .zero, size: measuredCardSize)
+            hostingView.layoutSubtreeIfNeeded()
+        } else {
+            let hosting = CardHostingView(rootView: view)
+            hosting.frame = CGRect(origin: .zero, size: measuredCardSize)
+            panel.contentView = hosting
+            hosting.layoutSubtreeIfNeeded()
+            hostingView = hosting
+        }
     }
 
     private func makeCardView(
@@ -473,36 +546,43 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         preferences: DockCatPreferences
     ) -> NotificationCardView {
         let actionSessionID = installedSessionID
-        let presentation: CardPresentationKind
-        switch notification.presentation {
-        case .transient: presentation = .transient
-        case .persistent: presentation = .persistent
-        }
-        let content = NotificationCardContent(
-            notificationID: notification.id,
-            sourceName: notification.sourceName,
-            title: notification.title,
-            message: notification.message,
-            presentation: presentation,
-            hasOpenAction: preferences.clickCardOpensAction
-                && notification.actionURL != nil,
-            canDismiss: preferences.transientManuallyDismissible
-                || notification.presentation == .persistent,
-            queueContext: queueContext
+        let content = makeCardContent(
+            notification: notification,
+            preferences: preferences
+        )
+        let accessibility = NotificationCardAccessibilityModel(content: content)
+        let appearanceCategory: CardAppearanceCategory = panel.effectiveAppearance.bestMatch(
+            from: [.aqua, .darkAqua]
+        ) == .darkAqua ? .dark : .light
+        let appearance = CardAccessibilityAppearancePolicy.resolve(
+            options: accessibilityDisplayOptions,
+            appearance: appearanceCategory,
+            interactionMode: interactionCoordinator.state.mode,
+            presentation: content.presentation
+        )
+        logger.info(
+            "Card accessibility semantics=\(accessibility.orderedElements.count, privacy: .public) appearance=\(appearance.category, privacy: .public)"
         )
         let modelRevision = hostingModelRevision
         return NotificationCardView(
             content: content,
+            accessibility: accessibility,
+            accessibilityAppearance: appearance,
+            isInteractive: panel.isInteractive,
             actionURL: notification.actionURL,
             cardWidth: measuredCardSize.width,
             layoutPlan: layoutPlan,
             interactionFocusGeneration: interactionFocusGeneration,
+            preferredFocusTarget: keyboardFocusTarget,
             measurementsChanged: { [weak self] measurements in
                 self?.receiveRegionMeasurements(
                     measurements,
                     notificationID: notification.id,
                     hostingModelRevision: modelRevision
                 )
+            },
+            focusChanged: { [weak self] target in
+                self?.keyboardFocusTarget = target
             },
             requestInteraction: { [weak self] trigger in
                 guard let actionSessionID else { return }
@@ -532,14 +612,40 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         )
     }
 
-    /// Replacement intentionally returns focus to the prior app before new content is
-    /// installed. A queued card never silently inherits keyboard interaction.
+    private func makeCardContent(
+        notification: DockCatNotification,
+        preferences: DockCatPreferences
+    ) -> NotificationCardContent {
+        let presentation: CardPresentationKind
+        switch notification.presentation {
+        case .transient: presentation = .transient
+        case .persistent: presentation = .persistent
+        }
+        return NotificationCardContent(
+            notificationID: notification.id,
+            sourceName: notification.sourceName,
+            title: notification.title,
+            message: notification.message,
+            presentation: presentation,
+            hasOpenAction: preferences.clickCardOpensAction
+                && notification.actionURL != nil,
+            canDismiss: preferences.transientManuallyDismissible
+                || notification.presentation == .persistent,
+            queueContext: queueContext
+        )
+    }
+
+    /// A new queued card starts passive. An in-place external content revision keeps the
+    /// current interaction token so an equivalent control can retain logical focus.
     private func beginPassivePresentation(_ sessionID: PresentationSessionID) {
+        accessibilityAnnouncer.cancelPending(reason: "replacement")
+        if installedSessionID == sessionID { return }
         if let oldSessionID = installedSessionID {
             interactionCoordinator.prepareExit(
                 .replacement, for: oldSessionID, panelIsKey: panel.isKeyWindow
             )
             interactionFocusGeneration = nil
+            keyboardFocusTarget = nil
             panel.returnToPassiveMode()
             interactionCoordinator.completeExit(for: oldSessionID)
             interactionCoordinator.clearPresentation(oldSessionID)
@@ -560,6 +666,9 @@ final class CardWindowController: NSObject, NSWindowDelegate {
               expectedHostingModelRevision == nil
                 || expectedHostingModelRevision == hostingModelRevision,
               validateInteractionSession?(sessionID) != false else { return }
+        logger.info(
+            "Accessibility interaction requested=\(trigger == .accessibility, privacy: .public) generation=\(sessionID.generation, privacy: .public)"
+        )
         _ = interactionCoordinator.requestInteraction(
             for: sessionID,
             trigger: trigger,
@@ -623,6 +732,21 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         panel.makeKeyAndOrderFront(nil)
         if let hostingView { panel.makeFirstResponder(hostingView) }
         interactionFocusGeneration = focusGeneration
+        if let installedContent {
+            let content = makeCardContent(
+                notification: installedContent.notification,
+                preferences: installedContent.preferences
+            )
+            let target = CardInitialFocusTarget.resolve(
+                hasOpenAction: content.hasOpenAction,
+                canDismiss: content.canDismiss,
+                bodySupportsKeyboardScrolling: layoutPlan.bodyScrolls
+            )
+            logger.info(
+                "Keyboard focus destination=\(target?.rawValue ?? "none", privacy: .public)"
+            )
+            keyboardFocusTarget = target.map(CardKeyboardTarget.init)
+        }
         // Do not replace SwiftUI's root while NSPanel is still dispatching the first mouse
         // event. Deferring focus installation keeps the original control's mouse-up/action
         // path intact; background clicks install deterministic keyboard focus next turn.
@@ -651,6 +775,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         interactionCoordinator.clearPresentation(sessionID)
         if installedSessionID == sessionID { installedSessionID = nil }
         interactionFocusGeneration = nil
+        keyboardFocusTarget = nil
         panel.returnToPassiveMode()
         panel.activeCardIsDismissible = false
     }
@@ -1012,6 +1137,32 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     var panelCanBecomeKeyForTesting: Bool { panel.canBecomeKey }
     var panelIsKeyForTesting: Bool { panel.isKeyWindow }
     var panelIsInteractiveForTesting: Bool { panel.isInteractive }
+    var accessibilityModelForTesting: NotificationCardAccessibilityModel? {
+        guard let installedContent else { return nil }
+        return .init(content: makeCardContent(
+            notification: installedContent.notification,
+            preferences: installedContent.preferences
+        ))
+    }
+    var accessibilityAppearanceForTesting: CardAccessibilityAppearance? {
+        guard let installedContent else { return nil }
+        let content = makeCardContent(
+            notification: installedContent.notification,
+            preferences: installedContent.preferences
+        )
+        return CardAccessibilityAppearancePolicy.resolve(
+            options: accessibilityDisplayOptions,
+            appearance: .light,
+            interactionMode: interactionCoordinator.state.mode,
+            presentation: content.presentation
+        )
+    }
+    var hostingViewIdentityForTesting: ObjectIdentifier? {
+        hostingView.map(ObjectIdentifier.init)
+    }
+    func requestAccessibilityInteractionForTesting() {
+        requestInteraction(trigger: .accessibility)
+    }
 
     func windowWillClose(_ notification: Notification) {
         if !suppressCloseCallback { onDismiss?() }

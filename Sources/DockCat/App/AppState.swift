@@ -133,10 +133,14 @@ final class AppState: ObservableObject {
         }
         desiredEnabled = settings.preferences.enabled
         runtimeSnapshot = runtimeLifecycle.snapshot
-        settings.accessibilityDisplayOptions.onChange = { [weak self] _ in
+        settings.accessibilityDisplayOptions.onChange = { [weak self] options in
+            self?.cardWindow.applyAccessibilityDisplayOptions(options)
             self?.scheduleVisualPreferenceRefresh()
         }
         settings.accessibilityDisplayOptions.start()
+        cardWindow.applyAccessibilityDisplayOptions(
+            settings.accessibilityDisplayOptions.options
+        )
         applyNewestVisualPreferences()
         systemNotificationAccess.setRuntimeAllowed(false)
         applyNewestPlacement()
@@ -973,6 +977,11 @@ final class AppState: ObservableObject {
                   ) == .valid else {
                 return handleExpectedInterruption(item: item, state: .presenting)
             }
+            cardWindow.announceStableCard(
+                sessionID: sessionID,
+                contentRevision: revision ?? 0,
+                category: .arrival
+            )
             return .completed(nextEvent: .cardPresented)
         case .enterWaitingState:
             catWindow.completeHandoffPose()
@@ -996,6 +1005,11 @@ final class AppState: ObservableObject {
                   ) == .valid else {
                 return handleExpectedInterruption(item: item, state: .presenting)
             }
+            cardWindow.announceStableCard(
+                sessionID: sessionID,
+                contentRevision: revision ?? 0,
+                category: (revision ?? 0) == 0 ? .arrival : .contentUpdate
+            )
             return .completed(nextEvent: .cardPresented)
         case .selectNextQueueAction:
             return await selectNextQueueAction(effect: effect)

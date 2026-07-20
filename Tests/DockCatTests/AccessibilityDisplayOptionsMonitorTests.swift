@@ -1,11 +1,12 @@
 import AppKit
+import DockCatCore
 import XCTest
 @testable import DockCat
 
 @MainActor
 final class AccessibilityDisplayOptionsMonitorTests: XCTestCase {
     func testPublishedReduceMotionChangesFromWorkspaceNotification() async {
-        let reader = DisplayOptionsReaderFake(reduceMotion: false)
+        let reader = DisplayOptionsReaderFake(options: .standard)
         let workspaceCenter = NotificationCenter()
         let appCenter = NotificationCenter()
         let monitor = AccessibilityDisplayOptionsMonitor(
@@ -13,24 +14,29 @@ final class AccessibilityDisplayOptionsMonitorTests: XCTestCase {
             workspaceNotificationCenter: workspaceCenter,
             applicationNotificationCenter: appCenter
         )
-        var values: [Bool] = []
+        var values: [AccessibilityDisplayOptions] = []
         monitor.onChange = { values.append($0) }
         monitor.start()
 
-        reader.reduceMotion = true
+        reader.options = .init(
+            reduceMotion: true,
+            increaseContrast: true,
+            reduceTransparency: true,
+            differentiateWithoutColor: true
+        )
         workspaceCenter.post(
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil
         )
         await Task.yield()
 
-        XCTAssertTrue(monitor.reduceMotion)
-        XCTAssertEqual(values, [true])
+        XCTAssertEqual(monitor.options, reader.options)
+        XCTAssertEqual(values, [reader.options])
         monitor.stop()
     }
 
     func testBecomingActiveRefreshesAndStopRemovesObservation() async {
-        let reader = DisplayOptionsReaderFake(reduceMotion: false)
+        let reader = DisplayOptionsReaderFake(options: .standard)
         let workspaceCenter = NotificationCenter()
         let appCenter = NotificationCenter()
         let monitor = AccessibilityDisplayOptionsMonitor(
@@ -39,13 +45,18 @@ final class AccessibilityDisplayOptionsMonitorTests: XCTestCase {
             applicationNotificationCenter: appCenter
         )
         monitor.start()
-        reader.reduceMotion = true
+        reader.options = .init(
+            reduceMotion: true,
+            increaseContrast: false,
+            reduceTransparency: false,
+            differentiateWithoutColor: false
+        )
         appCenter.post(name: NSApplication.didBecomeActiveNotification, object: nil)
         await Task.yield()
         XCTAssertTrue(monitor.reduceMotion)
 
         monitor.stop()
-        reader.reduceMotion = false
+        reader.options = .standard
         appCenter.post(name: NSApplication.didBecomeActiveNotification, object: nil)
         await Task.yield()
         XCTAssertTrue(monitor.reduceMotion)
@@ -54,6 +65,6 @@ final class AccessibilityDisplayOptionsMonitorTests: XCTestCase {
 
 @MainActor
 private final class DisplayOptionsReaderFake: AccessibilityDisplayOptionsReading {
-    var reduceMotion: Bool
-    init(reduceMotion: Bool) { self.reduceMotion = reduceMotion }
+    var options: AccessibilityDisplayOptions
+    init(options: AccessibilityDisplayOptions) { self.options = options }
 }

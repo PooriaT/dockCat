@@ -1,22 +1,31 @@
 import AppKit
+import DockCatCore
 import Foundation
 
 @MainActor
 protocol AccessibilityDisplayOptionsReading: AnyObject {
-    var reduceMotion: Bool { get }
+    var options: AccessibilityDisplayOptions { get }
 }
 
 @MainActor
 final class WorkspaceAccessibilityDisplayOptionsReader: AccessibilityDisplayOptionsReading {
-    var reduceMotion: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    var options: AccessibilityDisplayOptions {
+        let workspace = NSWorkspace.shared
+        return AccessibilityDisplayOptions(
+            reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,
+            increaseContrast: workspace.accessibilityDisplayShouldIncreaseContrast,
+            reduceTransparency: workspace.accessibilityDisplayShouldReduceTransparency,
+            differentiateWithoutColor: workspace.accessibilityDisplayShouldDifferentiateWithoutColor
+        )
     }
 }
 
 @MainActor
 final class AccessibilityDisplayOptionsMonitor: ObservableObject {
-    @Published private(set) var reduceMotion: Bool
-    var onChange: ((Bool) -> Void)?
+    @Published private(set) var options: AccessibilityDisplayOptions
+    var onChange: ((AccessibilityDisplayOptions) -> Void)?
+
+    var reduceMotion: Bool { options.reduceMotion }
 
     private let reader: AccessibilityDisplayOptionsReading
     private let workspaceNotificationCenter: NotificationCenter
@@ -31,7 +40,7 @@ final class AccessibilityDisplayOptionsMonitor: ObservableObject {
         self.reader = reader
         self.workspaceNotificationCenter = workspaceNotificationCenter
         self.applicationNotificationCenter = applicationNotificationCenter
-        reduceMotion = reader.reduceMotion
+        options = reader.options
     }
 
     func start() {
@@ -57,9 +66,9 @@ final class AccessibilityDisplayOptionsMonitor: ObservableObject {
     }
 
     func refresh() {
-        let newest = reader.reduceMotion
-        guard newest != reduceMotion else { return }
-        reduceMotion = newest
+        let newest = reader.options
+        guard newest != options else { return }
+        options = newest
         onChange?(newest)
     }
 
