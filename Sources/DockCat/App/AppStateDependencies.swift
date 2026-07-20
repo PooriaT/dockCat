@@ -153,3 +153,4 @@ extension DockCalibrationPreviewController: CalibrationPreviewing {}
 extension DisplayCatalog: DisplayCatalogProviding {}
 extension SystemNotificationAccessController: SystemNotificationSourceAccessing {}
 extension SystemNotificationPipeline: SystemNotificationPipelineHandling {}
+extension NativeBannerDismissalPerformer: NativeBannerDismissalPerforming {}

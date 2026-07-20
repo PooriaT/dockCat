@@ -1543,7 +1543,7 @@ extension AppState {
                 visibleFrame: .init(x: placement.visibleScreenFrame.origin.x, y: placement.visibleScreenFrame.origin.y, width: placement.visibleScreenFrame.size.width, height: placement.visibleScreenFrame.size.height),
                 requestedDisplayAvailable: placement.requestedDisplayAvailable,
                 fallbackUsed: placement.usedDisplayFallback,
-                calibrationPresent: settings.preferences.calibration(for: placement.displayIdentity, edge: placement.edge) != nil,
+                calibrationPresent: settings.preferences.dockCalibrations.contains { $0.displayIdentity == placement.displayIdentity && $0.dockEdge == placement.edge },
                 displayToken: placement.displayIdentity.diagnosticsToken
             )
         }
