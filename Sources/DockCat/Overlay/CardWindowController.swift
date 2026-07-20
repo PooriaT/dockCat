@@ -800,14 +800,17 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             width: textWidth,
             maximumLines: metrics.maximumTitleLines
         )
+        let cardContent = makeCardContent(
+            notification: notification,
+            preferences: preferences
+        )
         return .init(
             headerHeight: ceil(max(16, captionFont.boundingRectForFont.height)),
             titleHeight: titleHeight,
             bodyHeight: naturalTextHeight(
                 notification.message, font: bodyFont, width: textWidth
             ),
-            actionsHeight: preferences.clickCardOpensAction
-                && notification.actionURL != nil ? 22 : 0,
+            actionsHeight: cardContent.hasOpenAction || cardContent.canDismiss ? 22 : 0,
             queueFooterHeight: queueContext.isVisible
                 ? ceil(footerFont.boundingRectForFont.height) : 0
         )
@@ -1137,6 +1140,12 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     var panelCanBecomeKeyForTesting: Bool { panel.canBecomeKey }
     var panelIsKeyForTesting: Bool { panel.isKeyWindow }
     var panelIsInteractiveForTesting: Bool { panel.isInteractive }
+    func estimatedMeasurementsForTesting(
+        notification: DockCatNotification,
+        preferences: DockCatPreferences
+    ) -> CardContentRegionMeasurements {
+        estimatedMeasurements(notification: notification, preferences: preferences)
+    }
     var accessibilityModelForTesting: NotificationCardAccessibilityModel? {
         guard let installedContent else { return nil }
         return .init(content: makeCardContent(

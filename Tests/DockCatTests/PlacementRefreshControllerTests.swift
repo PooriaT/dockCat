@@ -182,6 +182,43 @@ final class PlacementRefreshControllerTests: XCTestCase {
         controller.forceHide()
     }
 
+    func testInitialEstimateReservesDismissOnlyActionRow() {
+        let controller = CardWindowController()
+        let persistent = DockCatNotification(
+            sourceName: "test", title: "Persistent", message: "No action",
+            presentation: .persistent
+        )
+        var preferences = DockCatPreferences()
+        preferences.transientManuallyDismissible = false
+        preferences.clickCardOpensAction = true
+
+        XCTAssertGreaterThan(
+            controller.estimatedMeasurementsForTesting(
+                notification: persistent, preferences: preferences
+            ).actionsHeight,
+            0
+        )
+
+        let transient = DockCatNotification(
+            sourceName: "test", title: "Transient", message: "No action"
+        )
+        preferences.transientManuallyDismissible = true
+        XCTAssertGreaterThan(
+            controller.estimatedMeasurementsForTesting(
+                notification: transient, preferences: preferences
+            ).actionsHeight,
+            0
+        )
+
+        preferences.transientManuallyDismissible = false
+        XCTAssertEqual(
+            controller.estimatedMeasurementsForTesting(
+                notification: transient, preferences: preferences
+            ).actionsHeight,
+            0
+        )
+    }
+
     func testReplacementRemeasuresAndChangesFrameHeight() async {
         let controller = CardWindowController()
         let short = DockCatNotification(
