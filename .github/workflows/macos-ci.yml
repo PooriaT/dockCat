@@ -1,0 +1,99 @@
+name: macOS CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Swift tests and app build
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    env:
+      XCODE_DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          test -d "$XCODE_DEVELOPER_DIR"
+          sudo xcode-select --switch "$XCODE_DEVELOPER_DIR"
+
+      - name: Print environment
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-logs
+          {
+            echo "macOS version:"
+            sw_vers
+            echo
+            echo "Architecture:"
+            uname -m
+            echo
+            echo "Xcode version:"
+            xcodebuild -version
+            echo
+            echo "Swift version:"
+            swift --version
+            echo
+            echo "Commit SHA: ${GITHUB_SHA}"
+          } | tee .ci-logs/environment.txt
+
+      - name: Validate Xcode project and DockCat scheme
+        run: |
+          set -euo pipefail
+          xcodebuild -list -project DockCat.xcodeproj | tee .ci-logs/xcodebuild-list.log
+          xcodebuild -list -project DockCat.xcodeproj | grep -E '^[[:space:]]+DockCat$' >/dev/null
+
+      - name: Run Swift package tests
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-logs
+          swift test --parallel 2>&1 | tee .ci-logs/swift-test.log
+
+      - name: Build DockCat app without signing
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-logs .ci-results
+          xcodebuild \
+            -project DockCat.xcodeproj \
+            -scheme DockCat \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath .ci-derived-data \
+            -resultBundlePath .ci-results/DockCatBuild.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build 2>&1 | tee .ci-logs/xcodebuild.log
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-ci-${{ github.job }}-attempt-${{ github.run_attempt }}-failure-evidence
+          path: |
+            .ci-logs/swift-test.log
+            .ci-logs/xcodebuild.log
+            .ci-logs/environment.txt
+            .ci-results/DockCatBuild.xcresult
+          if-no-files-found: warn
+          retention-days: 7
