@@ -200,13 +200,34 @@ AppKit screen selection is not repeated in the card controller.
   on-screen opposite-side candidate and screen corners. Preferred-side candidates always
   win. If no collision-free candidate exists, the clamped frame is returned with an
   `unavoidableCollision` degradation.
-- `NotificationCardView` keeps its intended 340-point width when the selected screen permits.
-  The hosting view is installed and laid out first; its fitting height is then clamped to the
-  120–480 point usability range and installed as the panel content size before placement is
-  planned. Replacement content and intrinsic-size invalidations remeasure and re-plan.
+- `NotificationCardContent` is the immutable semantic boundary for source, title, message,
+  presentation kind, control visibility, and privacy-safe `CardQueueContext`. It retains the
+  notification UUID only for identity and never contains an action URL, mutable preferences,
+  queue storage, or pending notification content.
+- `CardContentLayoutPlanner` is Foundation-only. It allocates header, bounded title, Open action,
+  queue footer, padding, and spacing before assigning the remaining bounded height to the message.
+  Short cards use their natural height above an 84-point compact safety floor. Only an overflowing
+  message scrolls; source, title, close, Open, and queue footer remain outside that scroll region.
+  The preferred width is 340 points, narrow screens can reduce it below the 220-point normal
+  minimum, and total height is bounded by both 480 points and the selected placement context.
+- SwiftUI reports separate header, title, natural body, action, and queue-footer heights. The
+  controller coalesces callbacks, ignores changes of 0.5 point or less, updates the pure plan,
+  owns the panel content size, and re-runs placement. Accessibility text-size changes therefore
+  grow natural regions until the bound is reached and then move body overflow into scrolling.
+  Empty or unusually small available frames return typed degradation rather than invalid geometry.
+- `AppState.cardQueueContext` is projected from authoritative revisioned queue snapshots only at
+  accepted mutation/reconciliation boundaries. It counts pending items only. Zero is hidden;
+  positive counts use deterministic singular/plural secondary copy, with a paused variant.
+  `CardWindowController.updateQueueContext` rejects stale revisions and updates the hosted model,
+  measurement, and stable frame in place without content replacement, a new presentation session,
+  dismissal, or transient timer changes. Full mode may subtly animate the size; Reduced Motion and
+  paused visual animations apply the valid final frame immediately.
 - Placement contexts carry the app's monotonic placement revision. Active presentation,
   replacement, and dismissal transactions rebase against newer revisions before accepting
   completion. Hidden panels only store context, and geometry updates never call `onDismiss`.
+
+Keyboard focus/scroll activation remains owned by issue #86. Complete VoiceOver traversal,
+announcement, and appearance semantics remain owned by issue #87.
 
 # External lifecycle reconciliation
 

@@ -212,8 +212,100 @@ final class PlacementRefreshControllerTests: XCTestCase {
         )
 
         XCTAssertEqual(result, .completed)
-        XCTAssertGreaterThan(controller.panelFrameForTesting.height, shortHeight)
+        let tallHeight = controller.panelFrameForTesting.height
+        XCTAssertGreaterThan(tallHeight, shortHeight)
         XCTAssertEqual(controller.panelFrameForTesting.size, controller.measuredCardSizeForTesting)
+
+        _ = await controller.replace(
+            notification: short,
+            preferences: DockCatPreferences(),
+            reducedMotion: true,
+            sessionID: sessionID
+        )
+        XCTAssertLessThan(controller.panelFrameForTesting.height, tallHeight)
+        XCTAssertEqual(controller.panelFrameForTesting.height, shortHeight, accuracy: 1)
+        controller.forceHide()
+    }
+
+    func testQueueFooterResizesVisibleCardInPlaceAndRejectsStaleRevision() async {
+        let controller = CardWindowController()
+        let notification = DockCatNotification(
+            sourceName: "Example", title: "Queued", message: "Short message"
+        )
+        let sessionID = PresentationSessionID(
+            generation: 1, notificationID: notification.id
+        )
+        var dismissCount = 0
+        controller.onDismiss = { dismissCount += 1 }
+        _ = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 600, y: 120), revision: 1),
+            logicalState: .presentation,
+            dismissalSourceRect: nil
+        )
+        _ = await controller.present(
+            notification: notification,
+            preferences: DockCatPreferences(),
+            from: .zero,
+            reducedMotion: true,
+            sessionID: sessionID
+        )
+        let originalHeight = controller.panelFrameForTesting.height
+        let operationSequence = controller.operationSequenceForTesting
+
+        controller.updateQueueContext(
+            .init(pendingCount: 2, isDeliveryPaused: false), revision: 10
+        )
+        let queuedHeight = controller.panelFrameForTesting.height
+
+        XCTAssertGreaterThan(queuedHeight, originalHeight)
+        XCTAssertEqual(controller.installedNotificationIDForTesting, notification.id)
+        XCTAssertEqual(controller.operationSequenceForTesting, operationSequence)
+        XCTAssertEqual(dismissCount, 0)
+
+        controller.updateQueueContext(.empty, revision: 9)
+        XCTAssertEqual(controller.queueContextForTesting.pendingCount, 2)
+        XCTAssertEqual(controller.queueContextRevisionForTesting, 10)
+
+        controller.updateQueueContext(.empty, revision: 11)
+        XCTAssertEqual(controller.panelFrameForTesting.height, originalHeight)
+        XCTAssertEqual(controller.operationSequenceForTesting, operationSequence)
+        XCTAssertEqual(dismissCount, 0)
+        controller.forceHide()
+    }
+
+    func testLongBodyIsInternallyScrollableAndPanelBounded() async {
+        let controller = CardWindowController()
+        let notification = DockCatNotification(
+            sourceName: "Example",
+            title: "Long body",
+            message: String(repeating: "Invented long body content. ", count: 300),
+            presentation: .persistent,
+            actionURL: URL(string: "https://example.com")
+        )
+        let sessionID = PresentationSessionID(
+            generation: 1, notificationID: notification.id
+        )
+        _ = controller.updatePlacementContext(
+            makeCardContext(anchor: CGPoint(x: 600, y: 120), revision: 1),
+            logicalState: .presentation,
+            dismissalSourceRect: nil
+        )
+
+        _ = await controller.present(
+            notification: notification,
+            preferences: DockCatPreferences(),
+            from: .zero,
+            reducedMotion: true,
+            sessionID: sessionID
+        )
+        for _ in 0..<5 { await Task.yield() }
+
+        XCTAssertTrue(controller.layoutPlanForTesting.bodyScrolls)
+        XCTAssertGreaterThan(controller.layoutPlanForTesting.bodyViewportHeight, 0)
+        XCTAssertLessThanOrEqual(
+            controller.panelFrameForTesting.height,
+            CardLayoutMetrics.maximumHeight
+        )
         controller.forceHide()
     }
 
@@ -283,12 +375,15 @@ final class PlacementRefreshControllerTests: XCTestCase {
             logicalState: .presentation,
             dismissalSourceRect: nil
         )
-        let expected = controller.stableCardFrameForTesting
         task.cancel()
         let result = await task.value
 
         XCTAssertEqual(result, .cancelled)
-        XCTAssertEqual(controller.panelFrameForTesting, expected)
+        XCTAssertEqual(
+            controller.panelFrameForTesting,
+            controller.stableCardFrameForTesting
+        )
+        XCTAssertEqual(controller.placementRevisionForTesting, 2)
     }
 
     private func makePlacement(

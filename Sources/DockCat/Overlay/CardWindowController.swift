@@ -17,29 +17,16 @@ struct CardPlacementContext: Equatable {
 }
 
 enum CardLayoutMetrics {
-    static let preferredWidth: CGFloat = 340
-    static let minimumWidth: CGFloat = 220
-    static let minimumHeight: CGFloat = 120
-    static let maximumHeight: CGFloat = 480
-    static let screenMargin: CGFloat = 10
+    static let values = CardContentLayoutMetrics.standard
+    static let preferredWidth = CGFloat(values.preferredWidth)
+    static let minimumWidth = CGFloat(values.minimumUsableWidth)
+    static let minimumHeight = CGFloat(values.compactMinimumHeight)
+    static let maximumHeight = CGFloat(values.maximumHeight)
+    static let screenMargin = CGFloat(values.screenMargin)
 }
 
 @MainActor
 private final class CardHostingView: NSHostingView<NotificationCardView> {
-    var fittingSizeDidChange: (() -> Void)?
-    private var callbackIsScheduled = false
-
-    override func invalidateIntrinsicContentSize() {
-        super.invalidateIntrinsicContentSize()
-        guard fittingSizeDidChange != nil, !callbackIsScheduled else { return }
-        callbackIsScheduled = true
-        Task { @MainActor [weak self] in
-            await Task.yield()
-            guard let self else { return }
-            self.callbackIsScheduled = false
-            self.fittingSizeDidChange?()
-        }
-    }
 }
 
 @MainActor
@@ -67,6 +54,15 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         let preferences: DockCatPreferences
     }
 
+    private struct PendingRegionMeasurement {
+        let measurements: CardContentRegionMeasurements
+        let notificationID: UUID
+        let hostingModelRevision: UInt64
+    }
+
+    /// Region changes below this threshold are layout noise, not semantic resizing.
+    private static let measurementEpsilon = 0.5
+
     private let panel = CardOverlayPanel()
     private let logger = Logger(subsystem: "com.example.DockCat", category: "CardPlacement")
     private var placementContext: CardPlacementContext?
@@ -78,6 +74,26 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     private var stableCardFrame: CGRect?
     private var installedContent: InstalledContent?
     private weak var hostingView: CardHostingView?
+    private var queueContext: CardQueueContext = .empty
+    private var queueContextRevision: NotificationQueueRevision = 0
+    private var regionMeasurements = CardContentRegionMeasurements(
+        headerHeight: 0,
+        titleHeight: 0,
+        bodyHeight: 0,
+        actionsHeight: 0,
+        queueFooterHeight: 0
+    )
+    private var layoutPlan = CardContentLayoutPlanner.plan(.init(
+        availableWidth: CardLayoutMetrics.preferredWidth,
+        availableHeight: CardLayoutMetrics.maximumHeight,
+        measurements: .init(
+            headerHeight: 0, titleHeight: 0, bodyHeight: 0,
+            actionsHeight: 0, queueFooterHeight: 0
+        )
+    ))
+    private var hostingModelRevision: UInt64 = 0
+    private var pendingRegionMeasurement: PendingRegionMeasurement?
+    private var measurementCallbackScheduled = false
     private var operationSequence: UInt64 = 0
     private var currentOperationID: OperationID?
     private var currentVisualOperation: VisualOperation?
@@ -108,10 +124,11 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         placementContext = context
         logicalPlacement = logicalState
         if let installedContent {
-            install(
+            regionMeasurements = estimatedMeasurements(
                 notification: installedContent.notification,
                 preferences: installedContent.preferences
             )
+            refreshContentLayout()
         }
         _ = resolveStableFrame()
 
@@ -128,6 +145,31 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         }
         applyStableFrame()
         return .init(animationWasRebased: false)
+    }
+
+    /// Updates only queue metadata. It deliberately leaves presentation operation and
+    /// session ownership untouched, so transient deadlines cannot be restarted here.
+    func updateQueueContext(
+        _ context: CardQueueContext,
+        revision: NotificationQueueRevision
+    ) {
+        guard revision >= queueContextRevision else {
+            logger.error(
+                "Stale queue context revision=\(revision, privacy: .public) current=\(self.queueContextRevision, privacy: .public) ignored=true"
+            )
+            return
+        }
+        guard revision != queueContextRevision || context != queueContext else { return }
+        queueContext = context
+        queueContextRevision = revision
+        guard installedContent != nil else { return }
+
+        let previousFrame = panel.frame
+        refreshContentLayout(resetMeasurementsForQueueFooter: true)
+        _ = resolveStableFrame()
+        guard panel.isVisible, logicalPlacement == .presentation else { return }
+        panel.setFrame(previousFrame, display: true)
+        applyResizeForCurrentVisualMode()
     }
 
     func cancelPresentationAnimation() {
@@ -149,6 +191,8 @@ final class CardWindowController: NSObject, NSWindowDelegate {
 
     func forceHide() {
         cancelPresentationAnimation()
+        hostingModelRevision &+= 1
+        pendingRegionMeasurement = nil
         suppressCloseCallback = true
         panel.orderOut(nil)
         suppressCloseCallback = false
@@ -366,67 +410,235 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             notification: notification,
             preferences: preferences
         )
-        let width = desiredCardWidth()
-        let view = NotificationCardView(
+        regionMeasurements = estimatedMeasurements(
             notification: notification,
-            canDismiss: preferences.transientManuallyDismissible
-                || notification.presentation == .persistent,
-            opensAction: preferences.clickCardOpensAction,
-            cardWidth: width
-        ) { [weak self] in
-            self?.onDismiss?()
-        }
-        let hosting = CardHostingView(rootView: view)
-        hosting.frame = CGRect(
-            x: 0, y: 0, width: width, height: CardLayoutMetrics.maximumHeight
+            preferences: preferences
         )
+        recalculateLayoutPlan()
+        hostingModelRevision &+= 1
+        let view = makeCardView(notification: notification, preferences: preferences)
+        let hosting = CardHostingView(rootView: view)
+        hosting.frame = CGRect(origin: .zero, size: measuredCardSize)
         panel.contentView = hosting
         hosting.layoutSubtreeIfNeeded()
         hostingView = hosting
-        applyMeasuredContentSize(from: hosting)
-        hosting.fittingSizeDidChange = { [weak self, weak hosting] in
-            guard let self, let hosting else { return }
-            self.handleFittingSizeChange(from: hosting)
+    }
+
+    private func makeCardView(
+        notification: DockCatNotification,
+        preferences: DockCatPreferences
+    ) -> NotificationCardView {
+        let presentation: CardPresentationKind
+        switch notification.presentation {
+        case .transient: presentation = .transient
+        case .persistent: presentation = .persistent
+        }
+        let content = NotificationCardContent(
+            notificationID: notification.id,
+            sourceName: notification.sourceName,
+            title: notification.title,
+            message: notification.message,
+            presentation: presentation,
+            hasOpenAction: preferences.clickCardOpensAction
+                && notification.actionURL != nil,
+            canDismiss: preferences.transientManuallyDismissible
+                || notification.presentation == .persistent,
+            queueContext: queueContext
+        )
+        let modelRevision = hostingModelRevision
+        return NotificationCardView(
+            content: content,
+            actionURL: notification.actionURL,
+            cardWidth: measuredCardSize.width,
+            layoutPlan: layoutPlan,
+            measurementsChanged: { [weak self] measurements in
+                self?.receiveRegionMeasurements(
+                    measurements,
+                    notificationID: notification.id,
+                    hostingModelRevision: modelRevision
+                )
+            },
+            dismiss: { [weak self] in self?.onDismiss?() }
+        )
+    }
+
+    private func estimatedMeasurements(
+        notification: DockCatNotification,
+        preferences: DockCatPreferences
+    ) -> CardContentRegionMeasurements {
+        let metrics = CardContentLayoutMetrics.standard
+        let textWidth = max(
+            0,
+            min(Double(availableCardSize().width), metrics.preferredWidth)
+                - metrics.horizontalPadding * 2
+        )
+        let captionFont = NSFont.preferredFont(forTextStyle: .caption1)
+        let headlineFont = NSFont.preferredFont(forTextStyle: .headline)
+        let bodyFont = NSFont.preferredFont(forTextStyle: .body)
+        let footerFont = NSFont.preferredFont(forTextStyle: .caption2)
+        let titleHeight = naturalTextHeight(
+            notification.title,
+            font: headlineFont,
+            width: textWidth,
+            maximumLines: metrics.maximumTitleLines
+        )
+        return .init(
+            headerHeight: ceil(max(16, captionFont.boundingRectForFont.height)),
+            titleHeight: titleHeight,
+            bodyHeight: naturalTextHeight(
+                notification.message, font: bodyFont, width: textWidth
+            ),
+            actionsHeight: preferences.clickCardOpensAction
+                && notification.actionURL != nil ? 22 : 0,
+            queueFooterHeight: queueContext.isVisible
+                ? ceil(footerFont.boundingRectForFont.height) : 0
+        )
+    }
+
+    private func naturalTextHeight(
+        _ text: String,
+        font: NSFont,
+        width: Double,
+        maximumLines: Int? = nil
+    ) -> Double {
+        guard !text.isEmpty, width > 0 else { return 0 }
+        let bounds = (text as NSString).boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font]
+        )
+        let natural = ceil(bounds.height)
+        guard let maximumLines else { return natural }
+        return min(
+            natural,
+            ceil(font.boundingRectForFont.height) * Double(maximumLines)
+        )
+    }
+
+    private func refreshContentLayout(resetMeasurementsForQueueFooter: Bool = false) {
+        guard let installedContent else { return }
+        if resetMeasurementsForQueueFooter {
+            regionMeasurements = .init(
+                headerHeight: regionMeasurements.headerHeight,
+                titleHeight: regionMeasurements.titleHeight,
+                bodyHeight: regionMeasurements.bodyHeight,
+                actionsHeight: regionMeasurements.actionsHeight,
+                queueFooterHeight: queueContext.isVisible
+                    ? ceil(NSFont.preferredFont(
+                        forTextStyle: .caption2
+                    ).boundingRectForFont.height)
+                    : 0
+            )
+        }
+        recalculateLayoutPlan()
+        hostingModelRevision &+= 1
+        hostingView?.rootView = makeCardView(
+            notification: installedContent.notification,
+            preferences: installedContent.preferences
+        )
+        hostingView?.frame = CGRect(origin: .zero, size: measuredCardSize)
+        hostingView?.layoutSubtreeIfNeeded()
+    }
+
+    private func recalculateLayoutPlan() {
+        let availableSize = availableCardSize()
+        layoutPlan = CardContentLayoutPlanner.plan(.init(
+            availableWidth: availableSize.width,
+            availableHeight: availableSize.height,
+            measurements: regionMeasurements
+        ))
+        measuredCardSize = CGSize(layoutPlan.cardSize)
+        panel.setContentSize(measuredCardSize)
+        hostingView?.frame = CGRect(origin: .zero, size: measuredCardSize)
+    }
+
+    /// Screen margin is removed here to provide the planner's placement-safe dimensions.
+    /// CardPlacementPlanner uses the same margin to position that already-bounded size;
+    /// it does not subtract the margin from the card a second time.
+    private func availableCardSize() -> CGSize {
+        guard let placementContext else {
+            return CGSize(
+                width: CardLayoutMetrics.preferredWidth,
+                height: CardLayoutMetrics.maximumHeight
+            )
+        }
+        return CGSize(
+            width: max(
+                0,
+                placementContext.visibleScreenFrame.width
+                    - CardLayoutMetrics.screenMargin * 2
+            ),
+            height: max(
+                0,
+                placementContext.visibleScreenFrame.height
+                    - CardLayoutMetrics.screenMargin * 2
+            )
+        )
+    }
+
+    private func receiveRegionMeasurements(
+        _ measurements: CardContentRegionMeasurements,
+        notificationID: UUID,
+        hostingModelRevision: UInt64
+    ) {
+        guard installedContent?.notification.id == notificationID,
+              hostingModelRevision == self.hostingModelRevision else { return }
+        pendingRegionMeasurement = .init(
+            measurements: measurements,
+            notificationID: notificationID,
+            hostingModelRevision: hostingModelRevision
+        )
+        guard !measurementCallbackScheduled else { return }
+        measurementCallbackScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.measurementCallbackScheduled = false
+            guard let newest = self.pendingRegionMeasurement else { return }
+            self.pendingRegionMeasurement = nil
+            self.applyRegionMeasurements(newest)
         }
     }
 
-    private func desiredCardWidth() -> CGFloat {
-        guard let placementContext else { return CardLayoutMetrics.preferredWidth }
-        let available = max(
-            0,
-            placementContext.visibleScreenFrame.width - CardLayoutMetrics.screenMargin * 2
-        )
-        if available < CardLayoutMetrics.minimumWidth { return available }
-        return min(CardLayoutMetrics.preferredWidth, available)
-    }
-
-    private func applyMeasuredContentSize(from hosting: CardHostingView) {
-        let fitting = hosting.fittingSize
-        measuredCardSize = CGSize(
-            width: desiredCardWidth(),
-            height: min(
-                CardLayoutMetrics.maximumHeight,
-                max(CardLayoutMetrics.minimumHeight, fitting.height)
-            )
-        )
-        panel.setContentSize(measuredCardSize)
-        hosting.frame = CGRect(origin: .zero, size: measuredCardSize)
-    }
-
-    private func handleFittingSizeChange(from hosting: CardHostingView) {
-        guard hosting === hostingView else { return }
+    private func applyRegionMeasurements(
+        _ pending: PendingRegionMeasurement
+    ) {
+        guard installedContent?.notification.id == pending.notificationID,
+              pending.hostingModelRevision == hostingModelRevision,
+              measurementsDiffer(
+                pending.measurements, regionMeasurements
+              ) else { return }
         let previousFrame = panel.frame
-        let previousSize = measuredCardSize
-        applyMeasuredContentSize(from: hosting)
-        guard abs(previousSize.width - measuredCardSize.width) > 0.5
-                || abs(previousSize.height - measuredCardSize.height) > 0.5 else { return }
+        regionMeasurements = pending.measurements
+        refreshContentLayout()
         _ = resolveStableFrame()
         guard panel.isVisible, logicalPlacement == .presentation else { return }
         panel.setFrame(previousFrame, display: true)
+        applyResizeForCurrentVisualMode()
+    }
+
+    private func measurementsDiffer(
+        _ lhs: CardContentRegionMeasurements,
+        _ rhs: CardContentRegionMeasurements
+    ) -> Bool {
+        abs(lhs.headerHeight - rhs.headerHeight) > Self.measurementEpsilon
+            || abs(lhs.titleHeight - rhs.titleHeight) > Self.measurementEpsilon
+            || abs(lhs.bodyHeight - rhs.bodyHeight) > Self.measurementEpsilon
+            || abs(lhs.actionsHeight - rhs.actionsHeight) > Self.measurementEpsilon
+            || abs(lhs.queueFooterHeight - rhs.queueFooterHeight) > Self.measurementEpsilon
+    }
+
+    private func applyResizeForCurrentVisualMode() {
+        let sizeAnimationApplied = pendingAnimation != nil
+            && visualPreferences.mode == .full
         if pendingAnimation != nil {
-            rebaseCurrentVisualOperation(animated: true)
+            rebaseCurrentVisualOperation(animated: sizeAnimationApplied)
         } else {
             applyStableFrame()
+        }
+        if let notificationID = installedContent?.notification.id {
+            logger.info(
+                "Card layout notification=\(notificationID, privacy: .public) pending=\(self.queueContext.pendingCount, privacy: .public) width=\(self.measuredCardSize.width, privacy: .public) height=\(self.measuredCardSize.height, privacy: .public) bodyScrolls=\(self.layoutPlan.bodyScrolls, privacy: .public) degradation=\(self.layoutPlan.degradation.rawValue, privacy: .public) placementRevision=\(self.placementContext?.placementRevision ?? 0, privacy: .public) queueRevision=\(self.queueContextRevision, privacy: .public) sizeAnimated=\(sizeAnimationApplied, privacy: .public)"
+            )
         }
     }
 
@@ -591,6 +803,15 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     var measuredCardSizeForTesting: CGSize { measuredCardSize }
     var stableCardFrameForTesting: CGRect? { stableCardFrame }
     var placementRevisionForTesting: UInt64? { placementContext?.placementRevision }
+    var queueContextForTesting: CardQueueContext { queueContext }
+    var queueContextRevisionForTesting: NotificationQueueRevision {
+        queueContextRevision
+    }
+    var installedNotificationIDForTesting: UUID? {
+        installedContent?.notification.id
+    }
+    var operationSequenceForTesting: UInt64 { operationSequence }
+    var layoutPlanForTesting: CardContentLayoutPlan { layoutPlan }
 
     func windowWillClose(_ notification: Notification) {
         if !suppressCloseCallback { onDismiss?() }
@@ -603,6 +824,10 @@ private extension Point {
 
 private extension Size {
     init(_ size: CGSize) { self.init(width: size.width, height: size.height) }
+}
+
+private extension CGSize {
+    init(_ size: Size) { self.init(width: size.width, height: size.height) }
 }
 
 private extension Rect {

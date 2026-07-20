@@ -137,6 +137,14 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
   when a collision-free position exists.
 - Present short and long title/message combinations, cards with an Open action, and persistent
   cards with the close control. Confirm the panel height follows the content without flashing.
+- Confirm a source and one-line title card is compact, a short body has no scrollbar, and a very
+  long invented body scrolls internally while source, title, close, Open, and queue footer stay
+  fixed and reachable. Repeat with a two- or three-line title and increased accessibility text size.
+- While a card is visible, enqueue one and then several items. Confirm subtle singular/plural queue
+  copy appears without a preview, disappears as pending items are removed or claimed, and changes
+  to `N waiting · delivery paused` during delivery pause. The current item must not be counted.
+- Confirm queue-footer appearance/disappearance resizes the same card in place without a crossfade,
+  dismissal callback, presentation-session change, or change to a transient's remaining time.
 - Replace a short visible card with a taller card and then reverse the order. Confirm origin and
   size animate together, remain on-screen, and the active notification session is unchanged.
 - While a card is visible, change Position settings, display resolution, accessibility text
@@ -145,9 +153,11 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 - Enable Dock auto-hide and repeat each Dock edge. Confirm fallback geometry remains within the
   selected screen's visible frame.
 - On an unusually small or scaled display, confirm an oversized card is constrained to the
-  margin-adjusted visible frame and placement diagnostics report a typed degraded result.
+  margin-adjusted visible frame, controls are preserved before body viewport space, and placement
+  or content-layout diagnostics report a typed degraded result.
 - Inspect card-placement logs. They may contain only Dock edge, card dimensions, clamp and
-  collision flags, placement revision, and degradation—never notification text or screen name.
+  collision flags, notification UUID, pending count, placement/queue revisions, scrolling and size
+  animation flags, and degradation—never notification text, action URL, or screen name.
 
 ## Stable display selection and Dock calibration
 
