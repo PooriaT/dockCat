@@ -82,6 +82,7 @@ final class AppState: ObservableObject {
     private var bootstrapGuard = ApplicationBootstrapGuard()
     private var startupNotificationBuffer = StartupNotificationBuffer()
     private let logger: any DockCatEventLogging
+    private let retainedDependencyObjects: [AnyObject]
 
     init(dependencies: AppStateDependencies) {
         self.settings = dependencies.settings
@@ -97,6 +98,7 @@ final class AppState: ObservableObject {
         self.systemNotificationPipeline = dependencies.systemPipeline
         self.nativeBannerDismissalPerformer = dependencies.nativeBannerDismissal
         self.logger = dependencies.logger
+        self.retainedDependencyObjects = dependencies.retainedObjects
         self.runtimeLifecycle = DockCatRuntimeLifecycle(
             initiallyEnabled: dependencies.settings.preferences.enabled,
             visualMode: dependencies.settings.effectiveAnimationPreferences.mode,
@@ -1456,7 +1458,51 @@ final class AppState: ObservableObject {
                 hasLastValidPlacement: lastValidPlacement != nil
             )
             let retainedLastValid = availability == .retainLastValidPlacement
-            logger.info("Placement refresh resolved")
+            logger.info("Placement refresh unavailable lastValid=\(retainedLastValid)")
+            return
+        }
+
+        let isFirstValidPlacement = lastValidPlacement == nil
+        lastValidPlacement = geometry
+        currentPlacement = geometry
+        isPlacementCurrentlyResolved = true
+        if let migrated = geometry.migratedSelection,
+           migrated != settings.preferences.displaySelection {
+            settings.preferences.displaySelection = migrated
+        }
+        if geometry.requestedDisplayAvailable {
+            calibrationPreview.update(geometry)
+        } else {
+            stopCalibrationPreview()
+        }
+        let sessionID = presentation.activeSessionID
+        let catOutcome = catWindow.updatePlacement(
+            geometry, logicalState: logicalPlacement, sessionID: sessionID
+        )
+        let destinationExclusionFrame = catWindow.presentationExclusionFrame()
+        let liveHandoffRect = catWindow.handoffSourceRect()
+        let cardOutcome = cardWindow.updatePlacementContext(
+            CardPlacementContext(
+                presentationAnchor: geometry.presentationPoint,
+                dockEdge: geometry.edge,
+                visibleScreenFrame: geometry.visibleScreenFrame,
+                catExclusionFrame: destinationExclusionFrame,
+                offset: settings.preferences.cardOffset,
+                placementRevision: placementRevision
+            ),
+            logicalState: logicalPlacement,
+            dismissalSourceRect: liveHandoffRect
+        )
+        if (isFirstValidPlacement || !catWindow.isVisible),
+           runtimeMode == .running,
+           machine.state == .sleeping,
+           presentation.activeSessionID == nil {
+            catWindow.showSleeping(using: geometry)
+            beginFlowIfNeeded()
+        }
+        logger.info(
+            "Placement refresh resolved oldEdge=\(catOutcome.previousDockEdge.rawValue) newEdge=\(geometry.edge.rawValue) motionRetargeted=\(catOutcome.motionWasRetargeted) cardRebased=\(cardOutcome.animationWasRebased) fallback=\(geometry.usedDisplayFallback)"
+        )
     }
 
     private var externalLifecycleIsStable: Bool {

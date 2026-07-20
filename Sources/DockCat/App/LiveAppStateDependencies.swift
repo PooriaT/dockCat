@@ -30,6 +30,6 @@ extension AppStateDependencies {
         let access = SystemNotificationAccessController(enabled: settings.preferences.systemNotificationsEnabled, runtimeAllowed: false, source: source, startImmediately: false)
         let pipeline = SystemNotificationPipeline(queue: queue, ownBundleIdentifier: bundleIdentifier)
         let nativeDismissal = NativeBannerDismissalPerformer(registry: registry, client: AccessibilityAPIClient())
-        return .init(settings: settings, displayCatalog: displayCatalog, queue: queue, catDriver: CatWindowController(), cardPresenter: CardWindowController(), placementProvider: DockLocator(), calibrationPreview: DockCalibrationPreviewController(), presentation: PresentationSessionCoordinator(clock: ContinuousPresentationClock()), systemAccess: access, sourceEvents: eventRouter, systemPipeline: pipeline, nativeBannerDismissal: nativeDismissal, logger: OSLogDockCatEventLogger())
+        return .init(settings: settings, displayCatalog: displayCatalog, queue: queue, catDriver: CatWindowController(), cardPresenter: CardWindowController(), placementProvider: DockLocator(), calibrationPreview: DockCalibrationPreviewController(), presentation: PresentationSessionCoordinator(clock: ContinuousPresentationClock()), systemAccess: access, sourceEvents: eventRouter, systemPipeline: pipeline, nativeBannerDismissal: nativeDismissal, logger: OSLogDockCatEventLogger(), retainedObjects: [source])
     }
 }

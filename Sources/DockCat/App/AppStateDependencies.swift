@@ -139,6 +139,7 @@ struct AppStateDependencies {
     let systemPipeline: any SystemNotificationPipelineHandling
     let nativeBannerDismissal: any NativeBannerDismissalPerforming
     let logger: any DockCatEventLogging
+    let retainedObjects: [AnyObject]
 }
 
 extension NotificationQueue: NotificationQueueing {}
