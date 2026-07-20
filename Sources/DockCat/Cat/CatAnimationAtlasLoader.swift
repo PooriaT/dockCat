@@ -9,7 +9,7 @@ struct CatFrameImageMetadata: Equatable, Sendable { let pixelWidth: Int; let pix
 protocol CatAnimationAssetLocating {
     func manifestData() throws -> Data
     func textureAtlas(named: String) throws -> SKTextureAtlas
-    func sourceImageMetadata(for frameName: String) throws -> CatFrameImageMetadata
+    func sourceImageMetadata(for frameName: String, inAtlas atlasName: String) throws -> CatFrameImageMetadata
 }
 
 enum CatArtworkLoadResult { case loaded(CatAnimationClipLibrary), vectorFallback(CatAssetDiagnosticDetail), unavailableOptionalAtlas }
@@ -51,7 +51,7 @@ final class CatAnimationAtlasLoader {
             var textures: [SKTexture] = []
             for frame in clipManifest.frameNames {
                 guard atlas.textureNames.contains(frame) || atlas.textureNames.contains(frame + ".png") else { return .vectorFallback(.missingFrame) }
-                guard let metadata = try? locator.sourceImageMetadata(for: frame), metadata == expected else { return .vectorFallback(.dimensionMismatch) }
+                guard let metadata = try? locator.sourceImageMetadata(for: frame, inAtlas: manifest.atlasName), metadata == expected else { return .vectorFallback(.dimensionMismatch) }
                 let texture = atlas.textureNamed(frame)
                 texture.filteringMode = .linear // Illustrated artwork uses interpolation; pixel art should version a new contract.
                 textures.append(texture)
@@ -73,8 +73,9 @@ struct ProductionCatAnimationAssetLocator: CatAnimationAssetLocating {
         return try Data(contentsOf: url)
     }
     func textureAtlas(named: String) throws -> SKTextureAtlas { SKTextureAtlas(named: "CatAnimations/\(named)") }
-    func sourceImageMetadata(for frameName: String) throws -> CatFrameImageMetadata {
-        guard let url = bundle.url(forResource: frameName, withExtension: "png", subdirectory: "CatAnimations/TestCat.atlas") ?? bundle.url(forResource: frameName, withExtension: nil, subdirectory: "CatAnimations/TestCat.atlas") else { throw CocoaError(.fileNoSuchFile) }
+    func sourceImageMetadata(for frameName: String, inAtlas atlasName: String) throws -> CatFrameImageMetadata {
+        let subdirectory = "CatAnimations/\(atlasName).atlas"
+        guard let url = bundle.url(forResource: frameName, withExtension: "png", subdirectory: subdirectory) ?? bundle.url(forResource: frameName, withExtension: nil, subdirectory: subdirectory) else { throw CocoaError(.fileNoSuchFile) }
         return try Self.metadata(url: url)
     }
     static func metadata(url: URL) throws -> CatFrameImageMetadata {
