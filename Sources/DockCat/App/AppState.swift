@@ -1,6 +1,5 @@
 import AppKit
 import DockCatCore
-import OSLog
 
 enum CardDismissalGate {
     static func allows(
@@ -20,8 +19,6 @@ enum CardDismissalGate {
 
 @MainActor
 final class AppState: ObservableObject {
-    private lazy var accessibilityElementRegistry = AccessibilityElementRegistry()
-    private lazy var nativeBannerDismissalPerformer = NativeBannerDismissalPerformer(registry: accessibilityElementRegistry, client: AccessibilityAPIClient())
     private struct DeferredExternalUpdate {
         let notification: DockCatNotification
         let revision: NotificationQueueRevision
@@ -46,50 +43,20 @@ final class AppState: ObservableObject {
         visualMode: .full,
         systemSourceRequested: false
     )
-    let settings = SettingsStore()
-    let displayCatalog = DisplayCatalog()
-    private lazy var systemNotificationSource = SystemNotificationAccessibilitySource(
-        dismissalRegistry: accessibilityElementRegistry,
-        generatedEventHandler: { [weak self] event, generation in
-            self?.receive(sourceEvent: event, generation: generation)
-        },
-        outcomeHandler: { _ in }
-    )
-    lazy var systemNotificationAccess: SystemNotificationAccessController = {
-        let controller = SystemNotificationAccessController(
-            enabled: settings.preferences.systemNotificationsEnabled,
-            runtimeAllowed: false,
-            source: systemNotificationSource,
-            startImmediately: false
-        )
-        systemNotificationSource.setOutcomeHandler { [weak controller, weak self] outcome in
-            guard let controller else { return }
-            switch outcome {
-            case .active: controller.sourceDidStart()
-            case .degraded: controller.sourceDidDegrade()
-            case .unavailable: controller.sourceDidBecomeUnavailable()
-            case .permissionRequired:
-                controller.sourceDidLosePermission()
-                self?.cancelActiveExternalSession(
-                    reason: .permissionLoss, context: "Accessibility permission loss"
-                )
-                self?.clearExternalNotifications()
-            }
-        }
-        controller.refresh()
-        return controller
-    }()
-
-    private let queue = DockCatCore.NotificationQueue()
-    private lazy var systemNotificationPipeline = SystemNotificationPipeline(
-        queue: queue, ownBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.example.DockCat"
-    )
+    let settings: any DockCatSettingsProviding
+    let displayCatalog: DisplayCatalog
+    var systemNotificationAccess: any SystemNotificationSourceAccessing { systemAccess }
+    private let queue: any NotificationQueueing
+    private let systemNotificationPipeline: any SystemNotificationPipelineHandling
     private var machine = CatStateMachine()
-    private let catWindow = CatWindowController()
-    private let cardWindow = CardWindowController()
-    private let locator = DockLocator()
-    private let calibrationPreview = DockCalibrationPreviewController()
-    private let presentation = PresentationSessionCoordinator()
+    private let catWindow: any CatVisualDriving
+    private let cardWindow: any CardPresenting
+    private let locator: any DockPlacementProviding
+    private let calibrationPreview: any CalibrationPreviewing
+    private let presentation: PresentationSessionCoordinator
+    private let systemAccess: any SystemNotificationSourceAccessing
+    private let sourceEvents: (any SystemNotificationSourceEventBinding)?
+    private let nativeBannerDismissalPerformer: any NativeBannerDismissalPerforming
     private var claimTask: Task<Void, Never>?
     private var lifecycleTask: Task<Void, Never>?
     private var presentationCancellationTasks: [Task<Void, Never>] = []
@@ -109,16 +76,35 @@ final class AppState: ObservableObject {
     private var visualPreferenceRefreshTask: Task<Void, Never>?
     private var placementRevision: UInt64 = 0
     private var lastValidPlacement: DockPlacement?
-    private lazy var runtimeLifecycle = DockCatRuntimeLifecycle(
-        initiallyEnabled: settings.preferences.enabled,
-        visualMode: settings.effectiveAnimationPreferences.mode,
-        systemSourceRequested: settings.preferences.systemNotificationsEnabled
-    )
+    private var runtimeLifecycle: DockCatRuntimeLifecycle
     private var desiredEnabled = false
     private var runtimeGeneration: UInt64 = 0
     private var bootstrapGuard = ApplicationBootstrapGuard()
     private var startupNotificationBuffer = StartupNotificationBuffer()
-    private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
+    private let logger: any DockCatEventLogging
+    private let retainedDependencyObjects: [AnyObject]
+
+    init(dependencies: AppStateDependencies) {
+        self.settings = dependencies.settings
+        self.displayCatalog = dependencies.displayCatalog
+        self.queue = dependencies.queue
+        self.catWindow = dependencies.catDriver
+        self.cardWindow = dependencies.cardPresenter
+        self.locator = dependencies.placementProvider
+        self.calibrationPreview = dependencies.calibrationPreview
+        self.presentation = dependencies.presentation
+        self.systemAccess = dependencies.systemAccess
+        self.sourceEvents = dependencies.sourceEvents
+        self.systemNotificationPipeline = dependencies.systemPipeline
+        self.nativeBannerDismissalPerformer = dependencies.nativeBannerDismissal
+        self.logger = dependencies.logger
+        self.retainedDependencyObjects = dependencies.retainedObjects
+        self.runtimeLifecycle = DockCatRuntimeLifecycle(
+            initiallyEnabled: dependencies.settings.preferences.enabled,
+            visualMode: dependencies.settings.effectiveAnimationPreferences.mode,
+            systemSourceRequested: dependencies.settings.preferences.systemNotificationsEnabled
+        )
+    }
 
     var runtimeMode: DockCatRuntimeMode { runtimeSnapshot.mode }
     var canMutatePause: Bool {
@@ -131,6 +117,7 @@ final class AppState: ObservableObject {
             logger.error("Bootstrap duplicate-start rejected")
             return
         }
+        bindCallbacks()
         desiredEnabled = settings.preferences.enabled
         runtimeSnapshot = runtimeLifecycle.snapshot
         settings.accessibilityDisplayOptions.onChange = { [weak self] options in
@@ -142,7 +129,7 @@ final class AppState: ObservableObject {
             settings.accessibilityDisplayOptions.options
         )
         applyNewestVisualPreferences()
-        systemNotificationAccess.setRuntimeAllowed(false)
+        systemAccess.setRuntimeAllowed(false)
         applyNewestPlacement()
         cardWindow.onDismiss = { [weak self] in self?.dismissCurrent() }
         cardWindow.validateInteractionSession = { [weak self] sessionID in
@@ -161,6 +148,27 @@ final class AppState: ObservableObject {
         }
     }
 
+
+    private func bindCallbacks() {
+        sourceEvents?.bind(
+            generatedEventHandler: { [weak self] event, generation in
+                self?.receive(sourceEvent: event, generation: generation)
+            },
+            outcomeHandler: { [weak self] outcome in
+                guard let self else { return }
+                switch outcome {
+                case .active: self.systemAccess.sourceDidStart()
+                case .degraded: self.systemAccess.sourceDidDegrade()
+                case .unavailable: self.systemAccess.sourceDidBecomeUnavailable()
+                case .permissionRequired:
+                    self.systemAccess.sourceDidLosePermission()
+                    self.cancelActiveExternalSession(reason: .permissionLoss, context: "Accessibility permission loss")
+                    self.clearExternalNotifications()
+                }
+            }
+        )
+    }
+
     func stop() async {
         guard runtimeMode != .shuttingDown else { return }
         _ = applyRuntime(.shutdown)
@@ -170,8 +178,8 @@ final class AppState: ObservableObject {
         lifecycleTask = nil
         activeLifecycle?.cancel()
         await activeLifecycle?.value
-        systemNotificationAccess.setRuntimeAllowed(false)
-        systemNotificationAccess.shutdown()
+        systemAccess.setRuntimeAllowed(false)
+        systemAccess.shutdown()
         await systemNotificationPipeline.deactivate()
         await stopLifecycleReconciliationAndWait()
         let claim = claimTask
@@ -216,6 +224,9 @@ final class AppState: ObservableObject {
         visualPreferenceRefreshTask?.cancel()
         visualPreferenceRefreshTask = nil
         settings.accessibilityDisplayOptions.stop()
+        sourceEvents?.unbind()
+        cardWindow.onDismiss = nil
+        cardWindow.validateInteractionSession = nil
         stopCalibrationPreview()
         displayCatalog.stop()
     }
@@ -238,7 +249,7 @@ final class AppState: ObservableObject {
             cancelActiveExternalSession(reason: .sourceShutdown, context: "source disabled")
             clearExternalNotifications()
         }
-        systemNotificationAccess.setEnabled(enabled)
+        systemAccess.setEnabled(enabled)
     }
 
     func setDockCatEnabled(_ enabled: Bool) {
@@ -249,7 +260,7 @@ final class AppState: ObservableObject {
         if !enabled && (runtimeMode == .running || runtimeMode == .deliveryPaused) {
             _ = applyRuntime(.beginDisabling)
             runtimeGeneration &+= 1
-            systemNotificationAccess.setRuntimeAllowed(false)
+            systemAccess.setRuntimeAllowed(false)
             stopCalibrationPreview()
             claimTask?.cancel()
             pauseTransitionTask?.cancel()
@@ -279,7 +290,7 @@ final class AppState: ObservableObject {
                 if runtimeMode == .running || runtimeMode == .deliveryPaused || runtimeMode == .enabling {
                     _ = applyRuntime(.beginDisabling)
                     runtimeGeneration &+= 1
-                    systemNotificationAccess.setRuntimeAllowed(false)
+                    systemAccess.setRuntimeAllowed(false)
                 }
                 guard runtimeMode == .disabling else { break }
                 await performDisableTransaction()
@@ -335,16 +346,14 @@ final class AppState: ObservableObject {
         let recovery = machine.recoverToSleeping()
         catState = recovery.safeState
         catWindow.resetVisualStateWhileHidden()
-        logger.info(
-            "Queue cleared current=\(clear.removedCurrentID != nil, privacy: .public) pending=\(clear.removedPendingCount, privacy: .public) revision=\(clear.revision, privacy: .public)"
-        )
+        logger.info("Queue cleared for global disable")
         _ = applyRuntime(.finishDisabling)
     }
 
     private func performEnableTransaction() async {
         runtimeGeneration &+= 1
         let generation = runtimeGeneration
-        systemNotificationAccess.setRuntimeAllowed(false)
+        systemAccess.setRuntimeAllowed(false)
         stopLifecycleReconciliation()
         let clear = await queue.clearForGlobalDisable()
         _ = observeQueueRevision(clear.revision)
@@ -364,11 +373,11 @@ final class AppState: ObservableObject {
         guard desiredEnabled, runtimeMode == .enabling, !Task.isCancelled else { return }
         if isPlacementCurrentlyResolved, let placement = currentPlacement {
             catWindow.showSleeping(using: placement)
-            logger.info("Cat overlay shown generation=\(generation, privacy: .public)")
+            logger.info("Cat overlay shown")
         }
         await queue.activateRuntimeGeneration(generation)
         await systemNotificationPipeline.activate(runtimeGeneration: generation)
-        systemNotificationAccess.setRuntimeAllowed(true)
+        systemAccess.setRuntimeAllowed(true)
         startLifecycleReconciliation(generation: generation)
         guard runtimeMode == .enabling, !Task.isCancelled else { return }
         _ = applyRuntime(.finishEnabling)
@@ -381,9 +390,7 @@ final class AppState: ObservableObject {
         let result = runtimeLifecycle.apply(action)
         guard case .accepted(let transition) = result else { return nil }
         runtimeSnapshot = transition.next
-        logger.info(
-            "Runtime transition previous=\(transition.previous.mode.rawValue, privacy: .public) next=\(transition.next.mode.rawValue, privacy: .public) generation=\(self.runtimeGeneration, privacy: .public)"
-        )
+        logger.runtimeTransition(previous: transition.previous.mode, next: transition.next.mode, generation: runtimeGeneration)
         return transition
     }
 
@@ -395,8 +402,8 @@ final class AppState: ObservableObject {
                 guard !Task.isCancelled, let self,
                       self.runtimeGeneration == generation,
                       self.runtimeMode.acceptsSubmissions,
-                      self.systemNotificationAccess.acceptsCallback(
-                        generation: self.systemNotificationAccess.generation
+                      self.systemAccess.acceptsCallback(
+                        generation: self.systemAccess.generation
                       ) else { return }
                 let outcomes = await self.systemNotificationPipeline.reconcile(
                     runtimeGeneration: generation
@@ -429,9 +436,7 @@ final class AppState: ObservableObject {
         if startupNotificationBuffer.deferIfEnabling(
             notification, runtimeMode: runtimeMode
         ) {
-            logger.info(
-                "Notification deferred during startup: \(notification.id, privacy: .public), pending: \(self.startupNotificationBuffer.count, privacy: .public)"
-            )
+            logger.info("Notification deferred during startup")
             return
         }
         guard runtimeMode.acceptsSubmissions else { return }
@@ -450,7 +455,7 @@ final class AppState: ObservableObject {
                 let result = await queue.enqueue(
                     notification, runtimeGeneration: generation
                 )
-                logger.info("Notification received: \(notification.id, privacy: .public), result: \(String(describing: result), privacy: .public)")
+                logger.info("Notification received")
                 _ = observeQueueRevision(result.revision)
                 acceptedAny = acceptedAny || result.wasAccepted
             }
@@ -463,8 +468,8 @@ final class AppState: ObservableObject {
 
     func receive(sourceEvent: NotificationSourceEvent, generation: UInt64) {
         guard runtimeMode.acceptsSubmissions,
-              systemNotificationAccess.acceptsCallback(generation: generation) else {
-            logger.info("Stale source callback rejected category=runtime-generation")
+              systemAccess.acceptsCallback(generation: generation) else {
+            logger.staleCallbackRejected(category: "runtime-generation")
             return
         }
         switch sourceEvent {
@@ -483,12 +488,12 @@ final class AppState: ObservableObject {
                     snapshot, transientDuration: settings.preferences.defaultTransientDuration,
                     runtimeGeneration: applicationGeneration
                 )
-                logger.info("Accessibility notification result=\(String(describing: result.kind), privacy: .public)")
+                logger.info("Accessibility notification ingested")
                 if applicationGeneration == runtimeGeneration,
                    runtimeMode.acceptsSubmissions,
-                   systemNotificationAccess.acceptsCallback(generation: generation),
+                   systemAccess.acceptsCallback(generation: generation),
                    settings.preferences.isNativeBannerDismissalEnabled,
-                   systemNotificationAccess.health.isHealthy,
+                   systemAccess.health.isHealthy,
                    let request = await systemNotificationPipeline.takeDismissalRequest() {
                     let exclusions = Set(DockCatPreferences.normalizedBundleIdentifiers(
                         settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers
@@ -497,11 +502,11 @@ final class AppState: ObservableObject {
                         token: request.tokenIdentifier, sourceBundleIdentifier: request.sourceBundleIdentifier,
                         notificationSubtreePath: request.notificationSubtreePath,
                         stableContainerIdentifier: request.stableContainerIdentifier, excluded: exclusions,
-                        ownBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.example.DockCat"
+                        ownBundleIdentifier: "com.example.DockCat"
                     )
-                    logger.info("Native banner dismissal outcome=\(String(describing: outcome), privacy: .public)")
+                    logger.info("Native banner dismissal attempted")
                     if outcome == .permissionRequired {
-                        systemNotificationAccess.sourceDidLosePermission()
+                        systemAccess.sourceDidLosePermission()
                         cancelActiveExternalSession(
                             reason: .permissionLoss, context: "Accessibility permission loss"
                         )
@@ -552,7 +557,7 @@ final class AppState: ObservableObject {
     ) async {
         guard let mutation else { return }
         guard runtimeMode.acceptsSubmissions else {
-            logger.info("Stale source callback rejected category=runtime-mode")
+            logger.staleCallbackRejected(category: "runtime-mode")
             return
         }
         guard observeQueueRevision(mutation.revision) else {
@@ -741,9 +746,7 @@ final class AppState: ObservableObject {
         cardWindow.applyVisualPreferences(newest)
         if geometryChanged { reposition() }
         guard previous != newest else { return }
-        logger.info(
-            "Visual preferences mode=\(newest.mode.rawValue, privacy: .public) appReduced=\(newest.appReducedMotion, privacy: .public) systemReduced=\(newest.systemReducedMotion, privacy: .public) idle=\(newest.idleAnimationEnabled, privacy: .public) scale=\(newest.catScale, privacy: .public) overlayWidth=\(CatOverlayGeometry(scale: newest.catScale).panelSize.width, privacy: .public) overlayHeight=\(CatOverlayGeometry(scale: newest.catScale).panelSize.height, privacy: .public) rebased=\(geometryChanged, privacy: .public)"
-        )
+        logger.info("Visual preferences refreshed")
     }
 
     var isCalibrationAvailable: Bool {
@@ -914,13 +917,9 @@ final class AppState: ObservableObject {
         switch result {
         case .accepted(let transition):
             catState = transition.nextState
-            logger.info(
-                "Cat transition previous=\(transition.previousState.rawValue, privacy: .public) event=\(transition.event.rawValue, privacy: .public) next=\(transition.nextState.rawValue, privacy: .public) effect=\(transition.effect.rawValue, privacy: .public)"
-            )
+            logger.catTransition(previous: transition.previousState, event: transition.event, next: transition.nextState, effect: transition.effect)
         case .rejected(let rejection):
-            logger.error(
-                "Cat transition rejected state=\(rejection.currentState.rawValue, privacy: .public) event=\(rejection.event.rawValue, privacy: .public) reason=\(rejection.reason.rawValue, privacy: .public) recovery=true"
-            )
+            logger.catTransitionRejected(state: rejection.currentState, event: rejection.event, reason: rejection.reason)
             scheduleRecovery(after: rejection)
         }
         return result
@@ -1163,7 +1162,7 @@ final class AppState: ObservableObject {
     }
 
     private func failClosedWithoutFlow(_ effect: CatCoordinatorEffect) {
-        logger.fault("Unexpected state-control effect=\(effect.rawValue, privacy: .public) recovery=true")
+        logger.fault("Unexpected state-control effect recovery=true")
         scheduleRecovery(afterEffect: effect)
     }
 
@@ -1187,7 +1186,7 @@ final class AppState: ObservableObject {
     }
 
     private func failClosed(_ effect: CatCoordinatorEffect) -> CatEffectExecutionOutcome {
-        logger.fault("Cat coordinator effect failed effect=\(effect.rawValue, privacy: .public) recovery=true")
+        logger.fault("Cat coordinator effect failed recovery=true")
         return .failed
     }
 
@@ -1217,9 +1216,7 @@ final class AppState: ObservableObject {
         guard case .began(let winner) = presentation.beginDismissal(
             sessionID: sessionID, cause: cause
         ) else { return }
-        logger.info(
-            "Presentation dismissal generation=\(sessionID.generation, privacy: .public) cause=\(winner.rawValue, privacy: .public)"
-        )
+        logger.info("Presentation dismissal began")
         cardWindow.prepareForDismissal(
             exit: cardInteractionExit(for: winner), sessionID: sessionID
         )
@@ -1314,9 +1311,7 @@ final class AppState: ObservableObject {
         revision: NotificationQueueRevision
     ) {
         guard revision >= cardQueueContextRevision else {
-            logger.error(
-                "Stale card queue context revision=\(revision, privacy: .public) current=\(self.cardQueueContextRevision, privacy: .public) ignored=true"
-            )
+            logger.error("Stale card queue context ignored")
             return
         }
         guard revision != cardQueueContextRevision
@@ -1339,9 +1334,7 @@ final class AppState: ObservableObject {
     @discardableResult
     private func observeQueueRevision(_ revision: NotificationQueueRevision) -> Bool {
         guard revision >= observedQueueRevision else {
-            logger.error(
-                "Stale queue decision revision=\(revision, privacy: .public) observed=\(self.observedQueueRevision, privacy: .public) ignored=true"
-            )
+            logger.error("Stale queue decision ignored")
             return false
         }
         observedQueueRevision = revision
@@ -1363,9 +1356,7 @@ final class AppState: ObservableObject {
     }
 
     private func failQueueReconciliation(context: String) {
-        logger.fault(
-            "Queue projection mismatch revision=\(self.observedQueueRevision, privacy: .public) context=\(context, privacy: .public) recovery=true"
-        )
+        logger.fault("Queue projection mismatch recovery=true")
         scheduleRecovery(context: "queue projection: \(context)")
     }
 
@@ -1421,9 +1412,7 @@ final class AppState: ObservableObject {
         pauseTransitionTask = nil
         let recovery = machine.recoverToSleeping()
         catState = recovery.safeState
-        logger.fault(
-            "Cat coordinator recovered previous=\(recovery.previousState.rawValue, privacy: .public) safe=\(recovery.safeState.rawValue, privacy: .public) context=\(context, privacy: .public)"
-        )
+        logger.recovery(context: context, previous: recovery.previousState, safe: recovery.safeState)
         isRecovering = false
         recoveryGate.recoveryCompleted()
         recoveryTask = nil
@@ -1469,9 +1458,7 @@ final class AppState: ObservableObject {
                 hasLastValidPlacement: lastValidPlacement != nil
             )
             let retainedLastValid = availability == .retainLastValidPlacement
-            logger.info(
-                "Placement refresh revision=\(self.placementRevision, privacy: .public) logical=\(logicalPlacement.rawValue, privacy: .public) motionRetargeted=false cardRebased=false fallback=false lastValid=\(retainedLastValid, privacy: .public)"
-            )
+            logger.info("Placement refresh unavailable lastValid=\(retainedLastValid)")
             return
         }
 
@@ -1492,8 +1479,6 @@ final class AppState: ObservableObject {
         let catOutcome = catWindow.updatePlacement(
             geometry, logicalState: logicalPlacement, sessionID: sessionID
         )
-        // Card exclusion protects the new destination even when outbound travel preserves
-        // the panel's old origin. Dismissal rebasing separately follows the live cat rect.
         let destinationExclusionFrame = catWindow.presentationExclusionFrame()
         let liveHandoffRect = catWindow.handoffSourceRect()
         let cardOutcome = cardWindow.updatePlacementContext(
@@ -1512,13 +1497,11 @@ final class AppState: ObservableObject {
            runtimeMode == .running,
            machine.state == .sleeping,
            presentation.activeSessionID == nil {
-            // Startup with no screen leaves the overlay unordered. Delivery is gated on
-            // this first valid placement, so the reset cannot interrupt active work.
             catWindow.showSleeping(using: geometry)
             beginFlowIfNeeded()
         }
         logger.info(
-            "Placement refresh revision=\(self.placementRevision, privacy: .public) logical=\(logicalPlacement.rawValue, privacy: .public) display=\(geometry.displayIdentity.diagnosticsToken, privacy: .public) oldEdge=\(catOutcome.previousDockEdge.rawValue, privacy: .public) newEdge=\(geometry.edge.rawValue, privacy: .public) confidence=\(geometry.geometryConfidence.rawValue, privacy: .public) calibration=\(!self.settings.preferences.calibration(for: geometry.displayIdentity, edge: geometry.edge).isZero, privacy: .public) motionRetargeted=\(catOutcome.motionWasRetargeted, privacy: .public) cardRebased=\(cardOutcome.animationWasRebased, privacy: .public) fallback=\(geometry.usedDisplayFallback, privacy: .public) lastValid=false"
+            "Placement refresh resolved oldEdge=\(catOutcome.previousDockEdge.rawValue) newEdge=\(geometry.edge.rawValue) motionRetargeted=\(catOutcome.motionWasRetargeted) cardRebased=\(cardOutcome.animationWasRebased) fallback=\(geometry.usedDisplayFallback)"
         )
     }
 

@@ -5,7 +5,7 @@ import OSLog
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
-    let state = AppState()
+    let state = AppState(dependencies: .live())
     lazy var settingsPresenter = SettingsWindowPresenter()
     lazy var menuBarVisibility = MenuBarVisibilityController(
         recoveryConfiguration: MenuBarRecoveryConfigurationVerifier(
