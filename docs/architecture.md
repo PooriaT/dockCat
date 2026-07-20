@@ -118,16 +118,16 @@ agent-app behavior.
 monotonic interaction generations, a prior process identifier, the pointer/keyboard/accessibility
 trigger category, and whether explicit interaction activated DockCat. Repeated requests for the
 same card are idempotent. Stale presentation or interaction generations cannot enter interaction
-or restore focus. External content replacement and queue advancement deliberately reset the
-visible panel to passive instead of transferring keyboard focus to new notification content.
+or restore focus. Queue advancement resets the visible panel to passive. A same-session external
+content revision reuses the hosting view and preserves an equivalent live control target.
 
 `CardInteractionCoordinator` is the main-actor bridge between that model and injectable focus and
 HTTPS-opening adapters. The panel reports the first deliberate pointer-down before dispatching the
 event to SwiftUI, so Open and Close work on that click without duplicating their actions. A card
 background or message click enters interactive mode but performs no control action. Accessibility
-may request the same typed transition; after any explicit entry, Tab and Shift-Tab remain local to
-the now-key panel. Initial control focus is deterministic: Open, then Close. Keyboard scrolling as
-an initial focus target is not enabled yet.
+may request the same typed transition after session validation. After explicit entry, local
+traversal is Open, Close, then an overflowing keyboard-scrollable message; Shift-Tab reverses it.
+Native Return/Space button activation and ScrollView navigation remain intact.
 
 `CardOverlayPanel.canBecomeKey` is false while passive and true only while interactive;
 `canBecomeMain` remains false. Entering interaction changes eligibility before DockCat activation
@@ -147,8 +147,19 @@ interactive and visible.
 Non-user disappearance, expiry, disable, permission loss, recovery, and shutdown clear interaction
 state. If DockCat still owns focus they may safely restore the prior running app after hiding; if the
 user has switched elsewhere they do nothing. Neither interaction entry nor cleanup touches queue
-revisions, presentation phases, transient deadlines, pause state, or runtime lifecycle. Full
-VoiceOver ordering, announcements, and accessibility appearance remain deferred to issue #87.
+revisions, presentation phases, transient deadlines, pause state, or runtime lifecycle.
+
+`NotificationCardAccessibilityModel` is the Foundation-only source of ordered regions, roles,
+stable identifiers, labels, hints, controls, queue status, and privacy-safe arrival copy. The
+SwiftUI container contains children rather than replacing them with one label. AppKit announcement
+delivery is injected, session/revision deduplicated, and scheduled only after `AppState` accepts the
+visible presentation completion. Queue metadata and appearance refreshes never replace session or
+timing ownership.
+
+`AccessibilityDisplayOptions` is one coherent four-flag value read by one workspace observer.
+`CardAccessibilityAppearancePolicy` resolves material versus opaque semantic background, separator
+emphasis, shadow/divider/focus treatment, and non-color-only status requirements without SwiftUI.
+Live appearance application does not begin an animation operation or recalculate geometry.
 
 ## Logical placement refresh
 

@@ -1,5 +1,35 @@
 # Manual testing
 
+## Overlay accessibility verification matrix
+
+Use invented notification content only. “Automated” records deterministic model/bridge coverage
+from `swift test`; “Pending hands-on” requires VoiceOver, keyboard, or live System Settings and
+was not represented as manually passed by the implementation environment.
+
+| Area | Scenarios | Expected | Recorded result |
+| --- | --- | --- | --- |
+| VoiceOver arrival | Passive transient and persistent | Source + behavior, never title/body; panel remains non-key | Automated policy passed; pending hands-on |
+| VoiceOver order | Source, behavior, heading, message, queue, Open, Dismiss | Deterministic children; paw hidden | Automated semantic/bridge tests passed; pending hands-on |
+| VoiceOver variants | Empty/long body, one/many queued, paused | Empty omitted; body scrolls; singular/plural and paused text | Automated model tests passed; pending hands-on |
+| VoiceOver lifecycle | Metadata, update, replacement, source loss, disable | Metadata silent/focus-stable; private update copy hidden; stale focus cleared | Automated session tests passed; pending hands-on |
+| Keyboard | Tab, Shift-Tab, Return, Space, Escape | Open → Dismiss → scroll body; reverse; native activation; scoped Escape | Automated order/gate tests passed; pending hands-on |
+| Keyboard focus | Body scrolling, Close restoration, Open | Standard scrolling; safe restoration; Open target owns focus | Automated focus policy passed; pending hands-on |
+| Appearance | Light/dark and all display options, alone/combined | Semantic colors; strong border/focus; opaque option; text + symbol status | Automated resolver/live-update tests passed; pending hands-on |
+| Placement | Three Dock edges, negative-coordinate display | Accessible card remains clamped and avoids protected frame | Existing placement tests passed; pending hands-on |
+| Motion | Four runtime visual modes and live Reduce Motion | Same semantic order; no continuous reduced travel; timer starts after presentation | Existing choreography tests passed; pending hands-on |
+| Replacement | Queue replacement/dismissal in every mode | One valid final frame, no stale completion or content flash | Existing cancellation tests passed; pending hands-on |
+
+Hands-on procedure:
+
+1. Enable VoiceOver and use Developer presets with invented copy. Verify order and arrival/update
+   wording without interacting first.
+2. Invoke “Interact with notification,” then exercise Tab, Shift-Tab, Return, Space, Escape,
+   arrows, Page Up, and Page Down. Confirm passive keystrokes stay with the prior app.
+3. Toggle each Accessibility > Display option alone and combined while a card is visible. Confirm
+   no transparent frame, spatial animation, session replacement, or timer restart.
+4. Repeat transient, persistent, queued replacement, and dismissal for all visual modes, Dock
+   edges, and a negative-coordinate secondary display.
+
 ## Hidden menu-bar recovery
 
 - In Settings, turn off **Show menu-bar icon**. Cancel the warning and confirm the paw remains. Repeat, copy the recovery command, and confirm the command is on the pasteboard without hiding. Repeat and choose **Hide Menu Item**.

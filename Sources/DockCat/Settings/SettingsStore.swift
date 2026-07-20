@@ -28,12 +28,12 @@ final class SettingsStore: ObservableObject {
         }
     }
     var effectiveReducedMotion: Bool {
-        preferences.reducedMotion || accessibilityDisplayOptions.reduceMotion
+        preferences.reducedMotion || accessibilityDisplayOptions.options.reduceMotion
     }
     var effectiveAnimationPreferences: EffectiveAnimationPreferences {
         EffectiveAnimationPreferences(inputs: .init(
             appReducedMotion: preferences.reducedMotion,
-            systemReducedMotion: accessibilityDisplayOptions.reduceMotion,
+            systemReducedMotion: accessibilityDisplayOptions.options.reduceMotion,
             disableWalking: preferences.disableWalking,
             pauseAnimations: preferences.pauseAnimations,
             idleAnimation: preferences.idleAnimation,
