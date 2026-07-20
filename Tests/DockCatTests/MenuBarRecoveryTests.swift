@@ -1,9 +1,15 @@
+import Combine
 import Foundation
 import XCTest
 @testable import DockCat
 import DockCatCore
 
 final class MenuBarRecoveryTests: XCTestCase {
+    @MainActor
+    func testApplicationDelegateIsObservableByItsSceneAdaptor() {
+        requireObservableObject(AppDelegate.self)
+    }
+
     @MainActor
     func testStoredVisibilityMigratesAndMissingValueDefaultsVisible() {
         let (suiteName, defaults) = makeDefaults()
@@ -52,6 +58,24 @@ final class MenuBarRecoveryTests: XCTestCase {
         controller.restore()
         XCTAssertTrue(controller.isVisible)
         XCTAssertTrue(defaults.bool(forKey: MenuBarVisibilityController.preferenceKey))
+    }
+
+    @MainActor
+    func testConfirmedHideAndRecoveryRestorePublishInsertionChanges() {
+        let (suiteName, defaults) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let controller = makeController(defaults: defaults)
+        var insertionChanges: [Bool] = []
+        let observation = controller.$isVisible.dropFirst().sink {
+            insertionChanges.append($0)
+        }
+
+        controller.requestVisibility(false)
+        controller.confirmHide()
+        controller.restore()
+
+        XCTAssertEqual(insertionChanges, [false, true])
+        withExtendedLifetime(observation) {}
     }
 
     @MainActor
@@ -167,4 +191,6 @@ final class MenuBarRecoveryTests: XCTestCase {
         guard case .failure(let error) = result else { return nil }
         return error
     }
+
+    private func requireObservableObject<T: ObservableObject>(_ type: T.Type) {}
 }

@@ -1,9 +1,10 @@
 import AppKit
+import Combine
 import DockCatCore
 import OSLog
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     let state = AppState()
     lazy var settingsPresenter = SettingsWindowPresenter()
     lazy var menuBarVisibility = MenuBarVisibilityController(
@@ -22,7 +23,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationTask: Task<Void, Never>?
     private var bootstrapGuard = ApplicationBootstrapGuard()
     private var commandsAwaitingBootstrap: [DockCatURLCommand] = []
+    private var menuBarVisibilityObservation: AnyCancellable?
     private let logger = Logger(subsystem: "com.example.DockCat", category: "Recovery")
+
+    override init() {
+        super.init()
+        // NSApplicationDelegateAdaptor observes an ObservableObject delegate. Forward the
+        // controller's changes so the App scene reevaluates MenuBarExtra's insertion binding.
+        menuBarVisibilityObservation = menuBarVisibility.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard bootstrapGuard.beginIfNeeded() else {

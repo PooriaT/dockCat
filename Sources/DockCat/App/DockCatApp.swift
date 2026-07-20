@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct DockCatApp: App {
+    // AppDelegate forwards MenuBarVisibilityController.objectWillChange. Because the delegate
+    // is ObservableObject, this adaptor invalidates the scene for URL/Settings-driven changes.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
