@@ -49,6 +49,36 @@ Lifecycle disappearance, active-card updates, and native-banner dismissal are in
 - Send a persistent notification and confirm the card remains visible indefinitely while the cat waits at the presentation anchor.
 - Close the card and confirm dismissal routes once, the card animates out, and only then does the cat return home.
 
+## Passive and interactive card focus
+
+- Type continuously in another application while transient and persistent cards appear. Confirm
+  DockCat does not activate, the card is not key, and every keystroke remains in that application.
+- With a passive card visible, press Escape and confirm nothing dismisses. Confirm presentation,
+  replacement, queue-footer changes, fitting-size updates, and placement refreshes never activate
+  DockCat.
+- Click card background and message/scroll content. Confirm DockCat becomes active, the panel becomes
+  key, no control fires, and Tab/Shift-Tab traverse Open then Close where present.
+- Click Open and Close directly on a passive card. Confirm each works on its first deliberate click
+  and fires once. Confirm a failed or rejected non-HTTPS Open leaves the card visible and interactive.
+- After background interaction, press Escape on a dismissible card and confirm it follows the same
+  one-shot dismissal route as Close. Repeat with a non-dismissible transient and confirm Escape is
+  ignored.
+- Interact with a card, close it, and confirm the previously active running application regains focus
+  only after the card resigns key or hides. Repeat after terminating that application and confirm no
+  activation is attempted.
+- Invoke Open and confirm the browser/target remains focused after card dismissal; the application
+  that was active before card interaction must not be reactivated over it.
+- Interact, manually switch to a third application, then close the card or let it expire. Confirm
+  DockCat does not steal focus from the third application.
+- Interact with one card and allow queued or external replacement. Confirm prior focus is restored
+  when safe and the replacement begins passive. A stale Escape or control callback must not dismiss
+  the replacement.
+- Repeat source disappearance, transient expiry, global disable, Accessibility permission loss,
+  fail-closed recovery, and shutdown while interactive. Confirm no key panel or delayed focus task
+  remains and force-hide never invokes user dismissal.
+- Repeat with Reduced Motion and Pause visual animations. Confirm focus policy is unchanged and
+  entering interaction never restarts or pauses the transient timer or mutates queue state.
+
 ## Queue
 
 - Queue three transient notifications with stay-in-place enabled and confirm card content transitions in place without walk-home, settle, sleep, or panel flashing.

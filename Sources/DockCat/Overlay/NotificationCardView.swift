@@ -1,5 +1,5 @@
-import AppKit
 import DockCatCore
+import Foundation
 import SwiftUI
 
 private enum CardSemanticRegion: Hashable {
@@ -37,12 +37,22 @@ private extension View {
 }
 
 struct NotificationCardView: View {
+    private enum FocusedControl: Hashable {
+        case open
+        case close
+    }
+
     let content: NotificationCardContent
     let actionURL: URL?
     let cardWidth: CGFloat
     let layoutPlan: CardContentLayoutPlan
+    let interactionFocusGeneration: UInt64?
     let measurementsChanged: (CardContentRegionMeasurements) -> Void
-    let dismiss: () -> Void
+    let requestInteraction: (CardInteractionTrigger) -> Void
+    let closeRequested: () -> Void
+    let openRequested: (URL) -> Void
+
+    @FocusState private var focusedControl: FocusedControl?
 
     var body: some View {
         VStack(alignment: .leading, spacing: CGFloat(CardContentLayoutMetrics.standard.interSectionSpacing)) {
@@ -63,9 +73,10 @@ struct NotificationCardView: View {
 
             if content.hasOpenAction, let actionURL {
                 Button("Open") {
-                    NSWorkspace.shared.open(actionURL)
-                    dismiss()
+                    openRequested(actionURL)
                 }
+                .focused($focusedControl, equals: .open)
+                .accessibilityIdentifier("dockcat.card.open")
                 .accessibilityHint("Opens the notification link in your browser")
                 .fixedSize(horizontal: false, vertical: true)
                 .layoutPriority(3)
@@ -95,7 +106,15 @@ struct NotificationCardView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.2)))
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("dockcat.card")
         .accessibilityLabel("DockCat notification from \(content.sourceName)")
+        .accessibilityAction(named: "Interact with notification") {
+            requestInteraction(.accessibility)
+        }
+        .onAppear { applyInitialFocusIfRequested() }
+        .onChange(of: interactionFocusGeneration) {
+            applyInitialFocusIfRequested()
+        }
         .onPreferenceChange(CardRegionHeightPreference.self) { heights in
             measurementsChanged(.init(
                 headerHeight: Double(heights[.header] ?? 0),
@@ -117,10 +136,12 @@ struct NotificationCardView: View {
                 .lineLimit(1)
             Spacer()
             if content.canDismiss {
-                Button(action: dismiss) {
+                Button(action: closeRequested) {
                     Image(systemName: "xmark.circle.fill")
                 }
                 .buttonStyle(.plain)
+                .focused($focusedControl, equals: .close)
+                .accessibilityIdentifier("dockcat.card.close")
                 .accessibilityLabel("Dismiss notification")
             }
         }
@@ -149,5 +170,21 @@ struct NotificationCardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)
             .reportCardHeight(.body)
+    }
+
+    private func applyInitialFocusIfRequested() {
+        guard interactionFocusGeneration != nil else {
+            focusedControl = nil
+            return
+        }
+        switch CardInitialFocusTarget.resolve(
+            hasOpenAction: content.hasOpenAction,
+            canDismiss: content.canDismiss,
+            bodySupportsKeyboardScrolling: false
+        ) {
+        case .open: focusedControl = .open
+        case .close: focusedControl = .close
+        case .message, nil: focusedControl = nil
+        }
     }
 }
