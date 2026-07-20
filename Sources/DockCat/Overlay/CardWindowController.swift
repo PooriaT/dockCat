@@ -64,6 +64,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     private static let measurementEpsilon = 0.5
 
     private let panel = CardOverlayPanel()
+    private let interactionCoordinator = CardInteractionCoordinator()
     private let logger = Logger(subsystem: "com.example.DockCat", category: "CardPlacement")
     private var placementContext: CardPlacementContext?
     private var logicalPlacement: CatLogicalPlacement = .home
@@ -73,6 +74,8 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     )
     private var stableCardFrame: CGRect?
     private var installedContent: InstalledContent?
+    private var installedSessionID: PresentationSessionID?
+    private var interactionFocusGeneration: UInt64?
     private weak var hostingView: CardHostingView?
     private var queueContext: CardQueueContext = .empty
     private var queueContextRevision: NotificationQueueRevision = 0
@@ -103,10 +106,20 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     private var pendingAnimation: PendingAnimation?
     private var suppressCloseCallback = false
     var onDismiss: (() -> Void)?
+    var validateInteractionSession: ((PresentationSessionID) -> Bool)?
 
     override init() {
         super.init()
         panel.delegate = self
+        interactionCoordinator.onDismissRequested = { [weak self] in
+            self?.onDismiss?()
+        }
+        panel.onPointerIntent = { [weak self] in
+            self?.requestInteraction(trigger: .pointer)
+        }
+        panel.onCancelRequested = { [weak self] in
+            self?.closeRequested(trigger: .keyboardNavigation)
+        }
     }
 
     /// Stores authoritative geometry even while hidden. A stale revision is ignored, and
@@ -189,13 +202,26 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    func forceHide() {
+    func forceHide(exit: CardInteractionExit = .globalDisable) {
         cancelPresentationAnimation()
         hostingModelRevision &+= 1
         pendingRegionMeasurement = nil
+        if let sessionID = installedSessionID {
+            interactionCoordinator.prepareExit(
+                exit, for: sessionID, panelIsKey: panel.isKeyWindow
+            )
+        }
+        interactionFocusGeneration = nil
+        panel.returnToPassiveMode()
         suppressCloseCallback = true
         panel.orderOut(nil)
         suppressCloseCallback = false
+        if let sessionID = installedSessionID {
+            interactionCoordinator.completeExit(for: sessionID)
+            interactionCoordinator.clearPresentation(sessionID)
+        }
+        installedSessionID = nil
+        panel.activeCardIsDismissible = false
         panel.alphaValue = 1
     }
 
@@ -208,6 +234,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         visualPreferences: EffectiveAnimationPreferences,
         sessionID: PresentationSessionID
     ) async -> PresentationAnimationResult {
+        beginPassivePresentation(sessionID)
         self.visualPreferences = visualPreferences
         let reducedMotion = Self.usesReducedMotionForCardAnimations(visualPreferences)
         let id = beginOperation(
@@ -274,6 +301,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
                 sessionID: sessionID
             )
         }
+        beginPassivePresentation(sessionID)
         let id = beginOperation(
             sessionID: sessionID, operation: .replacing,
             reducedMotion: reducedMotion
@@ -345,6 +373,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             suppressCloseCallback = true
             panel.orderOut(nil)
             suppressCloseCallback = false
+            finishInteractionAfterPanelHidden(sessionID: sessionID)
             applyStableFrame()
             panel.alphaValue = 1
             currentOperationID = nil
@@ -363,9 +392,22 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             self?.suppressCloseCallback = true
             panel.orderOut(nil)
             self?.suppressCloseCallback = false
+            self?.finishInteractionAfterPanelHidden(sessionID: sessionID)
             self?.applyStableFrame()
             panel.alphaValue = 1
         }
+    }
+
+    func prepareForDismissal(
+        exit: CardInteractionExit,
+        sessionID: PresentationSessionID
+    ) {
+        guard installedSessionID == sessionID else { return }
+        interactionCoordinator.prepareExit(
+            exit, for: sessionID, panelIsKey: panel.isKeyWindow
+        )
+        interactionFocusGeneration = nil
+        panel.returnToPassiveMode()
     }
 
     func dismissActive(
@@ -410,6 +452,8 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             notification: notification,
             preferences: preferences
         )
+        panel.activeCardIsDismissible = preferences.transientManuallyDismissible
+            || notification.presentation == .persistent
         regionMeasurements = estimatedMeasurements(
             notification: notification,
             preferences: preferences
@@ -428,6 +472,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
         notification: DockCatNotification,
         preferences: DockCatPreferences
     ) -> NotificationCardView {
+        let actionSessionID = installedSessionID
         let presentation: CardPresentationKind
         switch notification.presentation {
         case .transient: presentation = .transient
@@ -451,6 +496,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             actionURL: notification.actionURL,
             cardWidth: measuredCardSize.width,
             layoutPlan: layoutPlan,
+            interactionFocusGeneration: interactionFocusGeneration,
             measurementsChanged: { [weak self] measurements in
                 self?.receiveRegionMeasurements(
                     measurements,
@@ -458,8 +504,155 @@ final class CardWindowController: NSObject, NSWindowDelegate {
                     hostingModelRevision: modelRevision
                 )
             },
-            dismiss: { [weak self] in self?.onDismiss?() }
+            requestInteraction: { [weak self] trigger in
+                guard let actionSessionID else { return }
+                self?.requestInteraction(
+                    trigger: trigger,
+                    expectedSessionID: actionSessionID,
+                    expectedHostingModelRevision: modelRevision
+                )
+            },
+            closeRequested: { [weak self] in
+                guard let actionSessionID else { return }
+                self?.closeRequested(
+                    trigger: .pointer,
+                    expectedSessionID: actionSessionID,
+                    expectedHostingModelRevision: modelRevision
+                )
+            },
+            openRequested: { [weak self] url in
+                guard let actionSessionID else { return }
+                self?.openRequested(
+                    url,
+                    trigger: .pointer,
+                    expectedSessionID: actionSessionID,
+                    expectedHostingModelRevision: modelRevision
+                )
+            }
         )
+    }
+
+    /// Replacement intentionally returns focus to the prior app before new content is
+    /// installed. A queued card never silently inherits keyboard interaction.
+    private func beginPassivePresentation(_ sessionID: PresentationSessionID) {
+        if let oldSessionID = installedSessionID {
+            interactionCoordinator.prepareExit(
+                .replacement, for: oldSessionID, panelIsKey: panel.isKeyWindow
+            )
+            interactionFocusGeneration = nil
+            panel.returnToPassiveMode()
+            interactionCoordinator.completeExit(for: oldSessionID)
+            interactionCoordinator.clearPresentation(oldSessionID)
+        } else {
+            panel.returnToPassiveMode()
+        }
+        installedSessionID = sessionID
+        interactionCoordinator.beginPresentation(sessionID)
+    }
+
+    private func requestInteraction(
+        trigger: CardInteractionTrigger,
+        expectedSessionID: PresentationSessionID? = nil,
+        expectedHostingModelRevision: UInt64? = nil
+    ) {
+        guard panel.isVisible, let sessionID = installedSessionID,
+              expectedSessionID == nil || expectedSessionID == sessionID,
+              expectedHostingModelRevision == nil
+                || expectedHostingModelRevision == hostingModelRevision,
+              validateInteractionSession?(sessionID) != false else { return }
+        _ = interactionCoordinator.requestInteraction(
+            for: sessionID,
+            trigger: trigger,
+            setPanelInteractive: { [weak self] in
+                self?.panel.enterInteractiveMode()
+            },
+            makePanelKey: { [weak self] generation in
+                self?.makePanelKey(focusGeneration: generation)
+            }
+        )
+    }
+
+    private func closeRequested(
+        trigger: CardInteractionTrigger,
+        expectedSessionID: PresentationSessionID? = nil,
+        expectedHostingModelRevision: UInt64? = nil
+    ) {
+        guard panel.isVisible, panel.activeCardIsDismissible,
+              let sessionID = installedSessionID,
+              expectedSessionID == nil || expectedSessionID == sessionID,
+              expectedHostingModelRevision == nil
+                || expectedHostingModelRevision == hostingModelRevision,
+              validateInteractionSession?(sessionID) != false else { return }
+        interactionCoordinator.closeRequested(
+            for: sessionID,
+            trigger: trigger,
+            setPanelInteractive: { [weak self] in
+                self?.panel.enterInteractiveMode()
+            },
+            makePanelKey: { [weak self] generation in
+                self?.makePanelKey(focusGeneration: generation)
+            }
+        )
+    }
+
+    private func openRequested(
+        _ url: URL,
+        trigger: CardInteractionTrigger,
+        expectedSessionID: PresentationSessionID? = nil,
+        expectedHostingModelRevision: UInt64? = nil
+    ) {
+        guard panel.isVisible, let sessionID = installedSessionID,
+              expectedSessionID == nil || expectedSessionID == sessionID,
+              expectedHostingModelRevision == nil
+                || expectedHostingModelRevision == hostingModelRevision,
+              validateInteractionSession?(sessionID) != false else { return }
+        _ = interactionCoordinator.openRequested(
+            url,
+            for: sessionID,
+            trigger: trigger,
+            setPanelInteractive: { [weak self] in
+                self?.panel.enterInteractiveMode()
+            },
+            makePanelKey: { [weak self] generation in
+                self?.makePanelKey(focusGeneration: generation)
+            }
+        )
+    }
+
+    private func makePanelKey(focusGeneration: UInt64) {
+        panel.makeKeyAndOrderFront(nil)
+        if let hostingView { panel.makeFirstResponder(hostingView) }
+        interactionFocusGeneration = focusGeneration
+        // Do not replace SwiftUI's root while NSPanel is still dispatching the first mouse
+        // event. Deferring focus installation keeps the original control's mouse-up/action
+        // path intact; background clicks install deterministic keyboard focus next turn.
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.interactionFocusGeneration == focusGeneration,
+                  self.panel.isInteractive else { return }
+            self.refreshHostedInteractionState()
+        }
+    }
+
+    private func refreshHostedInteractionState() {
+        guard let installedContent, let hostingView else { return }
+        hostingModelRevision &+= 1
+        hostingView.rootView = makeCardView(
+            notification: installedContent.notification,
+            preferences: installedContent.preferences
+        )
+        hostingView.layoutSubtreeIfNeeded()
+    }
+
+    private func finishInteractionAfterPanelHidden(
+        sessionID: PresentationSessionID
+    ) {
+        interactionCoordinator.completeExit(for: sessionID)
+        interactionCoordinator.clearPresentation(sessionID)
+        if installedSessionID == sessionID { installedSessionID = nil }
+        interactionFocusGeneration = nil
+        panel.returnToPassiveMode()
+        panel.activeCardIsDismissible = false
     }
 
     private func estimatedMeasurements(
@@ -749,6 +942,7 @@ final class CardWindowController: NSObject, NSWindowDelegate {
             suppressCloseCallback = true
             panel.orderOut(nil)
             suppressCloseCallback = false
+            finishInteractionAfterPanelHidden(sessionID: pending.id.sessionID)
             applyStableFrame()
             panel.alphaValue = 1
         }
@@ -812,6 +1006,12 @@ final class CardWindowController: NSObject, NSWindowDelegate {
     }
     var operationSequenceForTesting: UInt64 { operationSequence }
     var layoutPlanForTesting: CardContentLayoutPlan { layoutPlan }
+    var interactionModeForTesting: CardInteractionMode {
+        interactionCoordinator.state.mode
+    }
+    var panelCanBecomeKeyForTesting: Bool { panel.canBecomeKey }
+    var panelIsKeyForTesting: Bool { panel.isKeyWindow }
+    var panelIsInteractiveForTesting: Bool { panel.isInteractive }
 
     func windowWillClose(_ notification: Notification) {
         if !suppressCloseCallback { onDismiss?() }

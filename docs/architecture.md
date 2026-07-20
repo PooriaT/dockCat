@@ -105,6 +105,51 @@ Dismissal is arbitrated once per session. User close, transient expiry, source d
 
 SpriteKit awaited actions use unique keyed operation IDs and checked continuations. Cancellation or slot replacement removes only that action and resumes `.cancelled`; loop removal stays independent. Cat panel travel is tied to the presentation token and validates before every frame or final snap. AppKit animations use cancellation handlers and deterministic completion/cancellation frames. Shutdown and recovery cancel the session before resetting visuals, so no animation waiter intentionally survives.
 
+## Card focus and interaction
+
+Every expanded card starts in `CardInteractionMode.passive`, including persistent cards and
+cards with Open actions. `orderFrontRegardless()` may order the accessory-app panel without
+activating DockCat, assigning a first responder, or making the panel key. Placement, fitting-size,
+queue-context, and visual-preference refreshes retain that passive state and never call
+`NSApp.activate`. This keeps typing in the previously active application and preserves DockCat's
+agent-app behavior.
+
+`CardInteractionState` is the Foundation-only transition model. It stores only presentation and
+monotonic interaction generations, a prior process identifier, the pointer/keyboard/accessibility
+trigger category, and whether explicit interaction activated DockCat. Repeated requests for the
+same card are idempotent. Stale presentation or interaction generations cannot enter interaction
+or restore focus. External content replacement and queue advancement deliberately reset the
+visible panel to passive instead of transferring keyboard focus to new notification content.
+
+`CardInteractionCoordinator` is the main-actor bridge between that model and injectable focus and
+HTTPS-opening adapters. The panel reports the first deliberate pointer-down before dispatching the
+event to SwiftUI, so Open and Close work on that click without duplicating their actions. A card
+background or message click enters interactive mode but performs no control action. Accessibility
+may request the same typed transition; after any explicit entry, Tab and Shift-Tab remain local to
+the now-key panel. Initial control focus is deterministic: Open, then Close. Keyboard scrolling as
+an initial focus target is not enabled yet.
+
+`CardOverlayPanel.canBecomeKey` is false while passive and true only while interactive;
+`canBecomeMain` remains false. Entering interaction changes eligibility before DockCat activation
+and `makeKeyAndOrderFront`. Returning passive explicitly resigns key. Escape is accepted only when
+the panel is interactive, currently key, and the active semantic card is dismissible. It emits the
+same typed close request as the Close control; programmatic order-out, replacement, disable,
+recovery, source disappearance, and shutdown never use the Escape callback.
+
+Interactive Close routes through `AppState.dismissCurrent()` and the existing presentation
+dismissal arbitration. The prior application is restored once, after the card has resigned key or
+hidden, only when the interaction and presentation generations remain current, the process still
+runs, and no third application became frontmost. A successful HTTPS Open uses the injected
+workspace opener, then takes the same dismissal route with a no-restoration policy because the
+browser or target app owns intentional focus. Failed or non-HTTPS Open requests leave the card
+interactive and visible.
+
+Non-user disappearance, expiry, disable, permission loss, recovery, and shutdown clear interaction
+state. If DockCat still owns focus they may safely restore the prior running app after hiding; if the
+user has switched elsewhere they do nothing. Neither interaction entry nor cleanup touches queue
+revisions, presentation phases, transient deadlines, pause state, or runtime lifecycle. Full
+VoiceOver ordering, announcements, and accessibility appearance remain deferred to issue #87.
+
 ## Logical placement refresh
 
 Screen and position-setting changes resolve a Foundation-only `CatLogicalPlacement` from

@@ -125,6 +125,11 @@ final class AppState: ObservableObject {
         systemNotificationAccess.setRuntimeAllowed(false)
         applyNewestPlacement()
         cardWindow.onDismiss = { [weak self] in self?.dismissCurrent() }
+        cardWindow.validateInteractionSession = { [weak self] sessionID in
+            self?.presentation.validate(
+                sessionID, phase: .waitingForDismissal
+            ) == .valid
+        }
         displayCatalog.onChange = { [weak self] in
             self?.objectWillChange.send()
             self?.reposition()
@@ -133,7 +138,7 @@ final class AppState: ObservableObject {
             scheduleLifecycleTransaction()
         } else {
             catWindow.hideOverlay()
-            cardWindow.forceHide()
+            cardWindow.forceHide(exit: .globalDisable)
             stopCalibrationPreview()
         }
     }
@@ -169,7 +174,7 @@ final class AppState: ObservableObject {
         presentationTasks.forEach { $0.cancel() }
         cardWindow.cancelPresentationAnimation()
         catWindow.cancelVisualWork()
-        cardWindow.forceHide()
+        cardWindow.forceHide(exit: .appShutdown)
         catWindow.hideOverlay()
         for task in presentationTasks { await task.value }
         let clear = await queue.clearForGlobalDisable()
@@ -231,7 +236,7 @@ final class AppState: ObservableObject {
             claimTask?.cancel()
             pauseTransitionTask?.cancel()
             presentationCancellationTasks = presentation.cancelSession(reason: .globalDisable)
-            cardWindow.forceHide()
+            cardWindow.forceHide(exit: .globalDisable)
             catWindow.hideOverlay()
         } else if enabled, runtimeMode == .disabled, lifecycleTask == nil {
             _ = applyRuntime(.beginEnabling)
@@ -294,7 +299,7 @@ final class AppState: ObservableObject {
         }
         cardWindow.cancelPresentationAnimation()
         catWindow.cancelVisualWork()
-        cardWindow.forceHide()
+        cardWindow.forceHide(exit: .globalDisable)
         catWindow.hideOverlay()
         let clear = await queue.clearForGlobalDisable()
         guard runtimeMode != .shuttingDown else { return }
@@ -509,7 +514,9 @@ final class AppState: ObservableObject {
     ) {
         guard current?.externalIdentity != nil, !isRecovering else { return }
         presentation.cancelSession(reason: reason)
-        cardWindow.forceHide()
+        cardWindow.forceHide(
+            exit: reason == .permissionLoss ? .permissionLoss : .sourceDismissal
+        )
         catWindow.cancelVisualWork()
         scheduleRecovery(context: context)
     }
@@ -1186,7 +1193,26 @@ final class AppState: ObservableObject {
         logger.info(
             "Presentation dismissal generation=\(sessionID.generation, privacy: .public) cause=\(winner.rawValue, privacy: .public)"
         )
+        cardWindow.prepareForDismissal(
+            exit: cardInteractionExit(for: winner), sessionID: sessionID
+        )
         startFlow(with: event)
+    }
+
+    private func cardInteractionExit(
+        for cause: DismissalCause
+    ) -> CardInteractionExit {
+        switch cause {
+        case .userClose: .close
+        case .sourceDisappearance, .sourceShutdown, .transientExpiry:
+            .sourceDismissal
+        case .replacement: .replacement
+        case .queueRemoval: .queueAdvancement
+        case .globalDisable: .globalDisable
+        case .permissionLoss: .permissionLoss
+        case .recovery: .failClosedRecovery
+        case .appShutdown: .appShutdown
+        }
     }
 
     private func startFlow(with event: CatEvent) {
@@ -1317,7 +1343,7 @@ final class AppState: ObservableObject {
         pauseTransitionTask?.cancel()
         cardWindow.cancelPresentationAnimation()
         catWindow.cancelVisualWork()
-        cardWindow.forceHide()
+        cardWindow.forceHide(exit: .failClosedRecovery)
         if let sessionID {
             await presentation.cancelTaskAndWait(.choreography, for: sessionID)
         }
@@ -1329,7 +1355,7 @@ final class AppState: ObservableObject {
         } else {
             catWindow.resetVisualStateWhileHidden()
         }
-        cardWindow.forceHide()
+        cardWindow.forceHide(exit: .failClosedRecovery)
         deferredExternalUpdate = nil
         deferredExternalDisappearance = nil
         dismissingNotification = nil
