@@ -2,6 +2,22 @@ import AppKit
 import DockCatCore
 import OSLog
 
+enum CardDismissalGate {
+    static func allows(
+        hasChoreographyTask: Bool,
+        isPaused: Bool,
+        isPauseTransitioning: Bool,
+        isRecovering: Bool,
+        catState: CatState
+    ) -> Bool {
+        !hasChoreographyTask
+            && !isPaused
+            && !isPauseTransitioning
+            && !isRecovering
+            && catState == .waitingForDismissal
+    }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     private lazy var accessibilityElementRegistry = AccessibilityElementRegistry()
@@ -126,9 +142,7 @@ final class AppState: ObservableObject {
         applyNewestPlacement()
         cardWindow.onDismiss = { [weak self] in self?.dismissCurrent() }
         cardWindow.validateInteractionSession = { [weak self] sessionID in
-            self?.presentation.validate(
-                sessionID, phase: .waitingForDismissal
-            ) == .valid
+            self?.cardInteractionIsEligible(for: sessionID) == true
         }
         displayCatalog.onChange = { [weak self] in
             self?.objectWillChange.send()
@@ -1184,8 +1198,7 @@ final class AppState: ObservableObject {
     }
 
     private func startDismissal(with event: CatEvent, cause: DismissalCause) {
-        guard !presentation.hasChoreographyTask, !isPaused, !isPauseTransitioning,
-              !isRecovering, machine.state == .waitingForDismissal,
+        guard cardDismissalIsEligible,
               let sessionID = presentation.activeSessionID else { return }
         guard case .began(let winner) = presentation.beginDismissal(
             sessionID: sessionID, cause: cause
@@ -1197,6 +1210,29 @@ final class AppState: ObservableObject {
             exit: cardInteractionExit(for: winner), sessionID: sessionID
         )
         startFlow(with: event)
+    }
+
+    /// Card controls may perform side effects only when the same synchronous gate that
+    /// accepts their dismissal is open. In particular, a paused waiting session remains
+    /// visible but cannot launch Open and leave an unconsumed explicit exit behind.
+    private func cardInteractionIsEligible(
+        for sessionID: PresentationSessionID
+    ) -> Bool {
+        current != nil
+            && cardDismissalIsEligible
+            && presentation.validate(
+                sessionID, phase: .waitingForDismissal
+            ) == .valid
+    }
+
+    private var cardDismissalIsEligible: Bool {
+        CardDismissalGate.allows(
+            hasChoreographyTask: presentation.hasChoreographyTask,
+            isPaused: isPaused,
+            isPauseTransitioning: isPauseTransitioning,
+            isRecovering: isRecovering,
+            catState: machine.state
+        )
     }
 
     private func cardInteractionExit(

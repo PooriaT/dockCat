@@ -4,6 +4,23 @@ import XCTest
 
 @MainActor
 final class CardInteractionCoordinatorTests: XCTestCase {
+    func testPausedWaitingCardIsNotEligibleForInteractionSideEffects() {
+        XCTAssertFalse(CardDismissalGate.allows(
+            hasChoreographyTask: false,
+            isPaused: true,
+            isPauseTransitioning: false,
+            isRecovering: false,
+            catState: .waitingForDismissal
+        ))
+        XCTAssertTrue(CardDismissalGate.allows(
+            hasChoreographyTask: false,
+            isPaused: false,
+            isPauseTransitioning: false,
+            isRecovering: false,
+            catState: .waitingForDismissal
+        ))
+    }
+
     func testExplicitInteractionCapturesAndActivatesOnce() {
         let focus = FocusControllerFake(frontmostPID: 200)
         let coordinator = CardInteractionCoordinator(
