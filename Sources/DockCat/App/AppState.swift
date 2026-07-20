@@ -17,6 +17,7 @@ final class AppState: ObservableObject {
     }
 
     @Published private(set) var current: DockCatNotification?
+    @Published private(set) var cardQueueContext: CardQueueContext = .empty
     @Published private(set) var catState: CatState = .sleeping
     @Published private(set) var isPaused = false
     @Published private(set) var isPauseTransitioning = false
@@ -82,6 +83,7 @@ final class AppState: ObservableObject {
     private var recoveryGate = CatRecoveryGate()
     private var requestedPauseState = false
     private var observedQueueRevision: NotificationQueueRevision = 0
+    private var cardQueueContextRevision: NotificationQueueRevision = 0
     private var currentProjectionRevision: NotificationQueueRevision = 0
     private var lifecycleReconciliationTask: Task<Void, Never>?
     private var deferredExternalUpdate: DeferredExternalUpdate?
@@ -172,6 +174,7 @@ final class AppState: ObservableObject {
         for task in presentationTasks { await task.value }
         let clear = await queue.clearForGlobalDisable()
         _ = observeQueueRevision(clear.revision)
+        projectQueueContext(.empty, revision: clear.revision)
         projectNoCurrent(revision: clear.revision)
         requestedPauseState = false
         isPaused = false
@@ -296,6 +299,7 @@ final class AppState: ObservableObject {
         let clear = await queue.clearForGlobalDisable()
         guard runtimeMode != .shuttingDown else { return }
         _ = observeQueueRevision(clear.revision)
+        projectQueueContext(.empty, revision: clear.revision)
         projectNoCurrent(revision: clear.revision)
         deferredExternalUpdate = nil
         deferredExternalDisappearance = nil
@@ -321,6 +325,7 @@ final class AppState: ObservableObject {
         stopLifecycleReconciliation()
         let clear = await queue.clearForGlobalDisable()
         _ = observeQueueRevision(clear.revision)
+        projectQueueContext(.empty, revision: clear.revision)
         projectNoCurrent(revision: clear.revision)
         requestedPauseState = false
         isPaused = false
@@ -428,6 +433,7 @@ final class AppState: ObservableObject {
             }
             guard acceptedAny, generation == runtimeGeneration,
                   runtimeMode.acceptsSubmissions else { return }
+            await refreshCardQueueContext()
             beginFlowIfNeeded()
         }
     }
@@ -525,6 +531,7 @@ final class AppState: ObservableObject {
             return
         }
         guard observeQueueRevision(mutation.revision) else {
+            if mutation.didMutate { await refreshCardQueueContext() }
             // A stale insertion is still stored. Starting a claim is safe because the actor
             // will return whichever current item is authoritative at its latest revision.
             switch mutation {
@@ -556,6 +563,7 @@ final class AppState: ObservableObject {
                 await reconcileSupersededExternalMutation(mutation)
             }
         }
+        if mutation.didMutate { await refreshCardQueueContext() }
     }
 
     /// A newer queue result may reach the main actor before an older lifecycle result.
@@ -758,6 +766,14 @@ final class AppState: ObservableObject {
                 failQueueReconciliation(context: "pause projection mismatch")
                 break
             }
+
+            projectQueueContext(
+                .init(
+                    pendingCount: outcome.pendingCount,
+                    isDeliveryPaused: outcome.isPaused
+                ),
+                revision: outcome.revision
+            )
 
             if outcome.isPaused != isPaused {
                 let event: CatEvent = outcome.isPaused ? .pause : .resume
@@ -1217,6 +1233,33 @@ final class AppState: ObservableObject {
         currentProjectionRevision = revision
     }
 
+    private func projectQueueContext(
+        _ context: CardQueueContext,
+        revision: NotificationQueueRevision
+    ) {
+        guard revision >= cardQueueContextRevision else {
+            logger.error(
+                "Stale card queue context revision=\(revision, privacy: .public) current=\(self.cardQueueContextRevision, privacy: .public) ignored=true"
+            )
+            return
+        }
+        guard revision != cardQueueContextRevision
+                || context != cardQueueContext else { return }
+        cardQueueContext = context
+        cardQueueContextRevision = revision
+        cardWindow.updateQueueContext(context, revision: revision)
+    }
+
+    /// Called only after an accepted queue mutation; this is reconciliation, not polling.
+    private func refreshCardQueueContext() async {
+        let snapshot = await queue.snapshot()
+        _ = observeQueueRevision(snapshot.revision)
+        projectQueueContext(
+            snapshot.cardQueueContext,
+            revision: snapshot.revision
+        )
+    }
+
     @discardableResult
     private func observeQueueRevision(_ revision: NotificationQueueRevision) -> Bool {
         guard revision >= observedQueueRevision else {
@@ -1236,6 +1279,10 @@ final class AppState: ObservableObject {
             failQueueReconciliation(context: context)
             return false
         }
+        projectQueueContext(
+            snapshot.cardQueueContext,
+            revision: snapshot.revision
+        )
         return true
     }
 
@@ -1292,6 +1339,7 @@ final class AppState: ObservableObject {
         requestedPauseState = false
         let pause = await queue.setPaused(false)
         _ = observeQueueRevision(pause.revision)
+        await refreshCardQueueContext()
         isPaused = false
         isPauseTransitioning = false
         pauseTransitionTask = nil

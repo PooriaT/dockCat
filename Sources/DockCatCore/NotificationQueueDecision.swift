@@ -14,6 +14,9 @@ public struct NotificationQueueSnapshot: Equatable, Sendable {
     public let recentCompletionCapacity: Int
 
     public var count: Int { pendingCount + (currentID == nil ? 0 : 1) }
+    public var cardQueueContext: CardQueueContext {
+        .init(pendingCount: pendingCount, isDeliveryPaused: isPaused)
+    }
 
     public func matches(projectedCurrent: DockCatNotification?) -> Bool {
         currentID == projectedCurrent?.id
@@ -92,6 +95,12 @@ public enum NotificationQueuePauseResult: Equatable, Sendable {
         case .changed(_, let id, _, _), .unchanged(_, let id, _, _): id
         }
     }
+
+    public var pendingCount: Int {
+        switch self {
+        case .changed(_, _, let count, _), .unchanged(_, _, let count, _): count
+        }
+    }
 }
 
 public enum NotificationQueueLimitResult: Equatable, Sendable {
@@ -164,4 +173,13 @@ public enum NotificationQueueExternalMutationResult: Equatable, Sendable {
     }
 
     public var requiresOrderedDismissal: Bool { removedCurrent != nil }
+
+    public var didMutate: Bool {
+        switch self {
+        case .inserted, .updatedCurrent, .updatedPending, .removedCurrent, .removedPending:
+            true
+        case .unchangedCurrent, .unchangedPending, .notFound, .duplicate, .full:
+            false
+        }
+    }
 }
