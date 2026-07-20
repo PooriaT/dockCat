@@ -11,6 +11,7 @@ final class CatScene: SKScene {
     private let head = SKShapeNode(ellipseOf: CGSize(width: 47, height: 41))
     private let card = SKShapeNode(rectOf: CGSize(width: 30, height: 20), cornerRadius: 3)
     private let carryAnchor = SKNode()
+    private var atlasSprite: SKSpriteNode?
     private var tail: SKShapeNode?
     private var hindPaw: SKShapeNode?
     private var frontPaw: SKShapeNode?
@@ -28,9 +29,26 @@ final class CatScene: SKScene {
     private var visualPreferences: EffectiveAnimationPreferences = .default
     private var isSleepingPose = true
     private var currentFacing: CatFacing = .resting
+    private let clipLibrary: CatAnimationClipLibrary?
+    private var currentSpriteClipID: CatAnimationClipID?
 
     override init(size: CGSize) {
+        let artworkLoadResult = CatAnimationAtlasLoader().load()
+        if case .loaded(let library) = artworkLoadResult { self.clipLibrary = library } else { self.clipLibrary = nil }
         super.init(size: size)
+        configureScene()
+    }
+
+    init(size: CGSize, artworkLoadResult: CatArtworkLoadResult) {
+        if case .loaded(let library) = artworkLoadResult { self.clipLibrary = library } else { self.clipLibrary = nil }
+        super.init(size: size)
+        configureScene()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+
+    private func configureScene() {
         backgroundColor = .clear
         scaleMode = .resizeFill
 
@@ -69,10 +87,32 @@ final class CatScene: SKScene {
         artworkRoot.addChild(carryAnchor)
         carryAnchor.addChild(card)
         addChild(layoutRoot)
+        configureSpriteAtlasNodeIfAvailable()
         playLoop()
     }
 
-    required init?(coder: NSCoder) { nil }
+    private func configureSpriteAtlasNodeIfAvailable() {
+        guard let clipLibrary else { return }
+        for child in artworkRoot.children where child !== carryAnchor {
+            child.isHidden = true
+        }
+        let sleepClip = clipLibrary[.sleep]
+        let sprite = SKSpriteNode(texture: sleepClip.textures.first)
+        sprite.size = CGSize(
+            width: CGFloat(CatOverlayGeometry.basePanelSize.width),
+            height: CGFloat(CatOverlayGeometry.basePanelSize.height)
+        )
+        sprite.anchorPoint = CGPoint(
+            x: CGFloat(sleepClip.anchors.visualAnchor.x / CatOverlayGeometry.basePanelSize.width),
+            y: CGFloat(sleepClip.anchors.visualAnchor.y / CatOverlayGeometry.basePanelSize.height)
+        )
+        sprite.position = .zero
+        sprite.zPosition = 1
+        artworkRoot.addChild(sprite)
+        atlasSprite = sprite
+        currentSpriteClipID = .sleep
+        carryAnchor.zPosition = 30
+    }
 
     private enum ActionKey {
         static let breathing = "cat.breathing"
@@ -81,6 +121,7 @@ final class CatScene: SKScene {
         static let turn = "cat.turn"
         static let cardPickup = "cat.cardPickup"
         static let settle = "cat.settle"
+        static let spriteLoop = "cat.spriteLoop"
     }
 
     private func run(
@@ -90,6 +131,7 @@ final class CatScene: SKScene {
         actionKey: String,
         completion: @escaping @MainActor () -> Void
     ) {
+        if let clipID = CatAnimationClipResolver.clipID(for: animation), playSpriteClip(clipID, animation: animation, duration: duration, preferences: preferences, actionKey: actionKey, completion: completion) { return }
         if preferences.mode == .animationsPaused {
             applyFinalState(for: animation)
             completion()
@@ -280,6 +322,61 @@ final class CatScene: SKScene {
         }
     }
 
+
+    private func playSpriteClip(
+        _ clipID: CatAnimationClipID,
+        animation: CatAnimation,
+        duration: TimeInterval,
+        preferences: EffectiveAnimationPreferences,
+        actionKey: String,
+        completion: @escaping @MainActor () -> Void
+    ) -> Bool {
+        guard let clipLibrary else { return false }
+        if case .walkToPresentationLoop(let context) = animation {
+            if preferences.mode == .walkingDisabled || context.phase == .staticCarry {
+                applyFinalState(for: animation); completion(); return true
+            }
+        }
+        let clip = clipLibrary[clipID]
+        guard let atlasSprite else { return false }
+        currentSpriteClipID = clipID
+        applyFinalState(for: animation)
+        let finalTexture = clip.textures.last ?? atlasSprite.texture
+        if clip.playback != .loop { poseRoot.removeAction(forKey: ActionKey.spriteLoop) }
+        if preferences.mode == .animationsPaused || preferences.mode == .reducedMotion || clip.textures.count <= 1 {
+            atlasSprite.texture = finalTexture
+            completion(); return true
+        }
+        if clip.playback == .loop {
+            startSpriteLoop(clip, sprite: atlasSprite)
+            completion(); return true
+        }
+        runSpriteTransition(clip, sprite: atlasSprite, actionKey: actionKey, completion: completion)
+        return true
+    }
+
+    private func startSpriteLoop(_ clip: CatAnimationClip, sprite: SKSpriteNode) {
+        guard poseRoot.action(forKey: ActionKey.spriteLoop) == nil else { return }
+        let frames = clip.textures.map { texture in SKAction.run { [weak sprite] in sprite?.texture = texture } }
+        let waits = frames.flatMap { [$0, SKAction.wait(forDuration: clip.secondsPerFrame)] }
+        poseRoot.run(.repeatForever(.sequence(waits)), withKey: ActionKey.spriteLoop)
+    }
+
+    private func runSpriteTransition(
+        _ clip: CatAnimationClip,
+        sprite: SKSpriteNode,
+        actionKey: String,
+        completion: @escaping @MainActor () -> Void
+    ) {
+        var actions: [SKAction] = []
+        for texture in clip.textures {
+            actions.append(.run { [weak sprite] in sprite?.texture = texture })
+            actions.append(.wait(forDuration: clip.secondsPerFrame))
+        }
+        actions.append(.run { completion() })
+        poseRoot.run(.sequence(actions), withKey: actionKey)
+    }
+
     private func finishAnimation(
         _ operationID: UUID,
         result: PresentationAnimationResult
@@ -379,6 +476,7 @@ final class CatScene: SKScene {
 
     private func stopWalkLoop() {
         poseRoot.removeAction(forKey: ActionKey.walking)
+        poseRoot.removeAction(forKey: ActionKey.spriteLoop)
         tail?.removeAction(forKey: ActionKey.tail)
         frontPaw?.removeAllActions(); hindPaw?.removeAllActions()
         poseRoot.position = .zero
@@ -506,4 +604,6 @@ final class CatScene: SKScene {
     var isWalkingForTesting: Bool {
         poseRoot.action(forKey: ActionKey.walking) != nil
     }
+    var currentSpriteClipIDForTesting: CatAnimationClipID? { currentSpriteClipID }
+    var usesSpriteAtlasForTesting: Bool { clipLibrary != nil }
 }

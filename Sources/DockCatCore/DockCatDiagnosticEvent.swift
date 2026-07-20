@@ -2,7 +2,7 @@ import Foundation
 
 public struct DockCatDiagnosticEvent: Codable, Equatable, Sendable {
     public enum Category: String, Codable, Equatable, Sendable, CaseIterable {
-        case runtimeTransition, catTransition, effect, queueMutation, presentationPhase, sourceHealth, placementRefresh, recovery, staleCallbackRejected, sourceToggle, deliveryPause
+        case runtimeTransition, catTransition, effect, queueMutation, presentationPhase, sourceHealth, placementRefresh, recovery, staleCallbackRejected, sourceToggle, deliveryPause, catAssetPipeline
     }
     public enum Outcome: String, Codable, Equatable, Sendable, CaseIterable { case requested, started, completed, cancelled, failed, rejected, changed, unchanged }
     public let sequence: UInt64
