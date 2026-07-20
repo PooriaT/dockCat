@@ -99,6 +99,7 @@ final class AppState: ObservableObject {
     private var desiredEnabled = false
     private var runtimeGeneration: UInt64 = 0
     private var bootstrapGuard = ApplicationBootstrapGuard()
+    private var startupNotificationBuffer = StartupNotificationBuffer()
     private let logger = Logger(subsystem: "com.example.DockCat", category: "AppState")
 
     var runtimeMode: DockCatRuntimeMode { runtimeSnapshot.mode }
@@ -178,6 +179,7 @@ final class AppState: ObservableObject {
         deferredExternalUpdate = nil
         deferredExternalDisappearance = nil
         dismissingNotification = nil
+        startupNotificationBuffer.removeAll()
         isRecovering = false
         recoveryGate.recoveryCompleted()
         let machineRecovery = machine.recoverToSleeping()
@@ -217,6 +219,7 @@ final class AppState: ObservableObject {
         guard desiredEnabled != enabled || settings.preferences.enabled != enabled else { return }
         settings.preferences.enabled = enabled
         desiredEnabled = enabled
+        if !enabled { startupNotificationBuffer.removeAll() }
         if !enabled && (runtimeMode == .running || runtimeMode == .deliveryPaused) {
             _ = applyRuntime(.beginDisabling)
             runtimeGeneration &+= 1
@@ -341,6 +344,7 @@ final class AppState: ObservableObject {
         startLifecycleReconciliation(generation: generation)
         guard runtimeMode == .enabling, !Task.isCancelled else { return }
         _ = applyRuntime(.finishEnabling)
+        enqueue(startupNotificationBuffer.drainIfRunning(runtimeMode: runtimeMode))
         beginFlowIfNeeded()
     }
 
@@ -394,16 +398,35 @@ final class AppState: ObservableObject {
     }
 
     func submit(_ notification: DockCatNotification) {
+        if startupNotificationBuffer.deferIfEnabling(
+            notification, runtimeMode: runtimeMode
+        ) {
+            logger.info(
+                "Notification deferred during startup: \(notification.id, privacy: .public), pending: \(self.startupNotificationBuffer.count, privacy: .public)"
+            )
+            return
+        }
         guard runtimeMode.acceptsSubmissions else { return }
+        enqueue([notification])
+    }
+
+    private func enqueue(_ notifications: [DockCatNotification]) {
+        guard !notifications.isEmpty else { return }
         let generation = runtimeGeneration
         Task {
             observeQueueRevision((await queue.setLimit(
                 settings.preferences.queueLimit, runtimeGeneration: generation
             )).revision)
-            let result = await queue.enqueue(notification, runtimeGeneration: generation)
-            logger.info("Notification received: \(notification.id, privacy: .public), result: \(String(describing: result), privacy: .public)")
-            _ = observeQueueRevision(result.revision)
-            guard result.wasAccepted, generation == runtimeGeneration,
+            var acceptedAny = false
+            for notification in notifications {
+                let result = await queue.enqueue(
+                    notification, runtimeGeneration: generation
+                )
+                logger.info("Notification received: \(notification.id, privacy: .public), result: \(String(describing: result), privacy: .public)")
+                _ = observeQueueRevision(result.revision)
+                acceptedAny = acceptedAny || result.wasAccepted
+            }
+            guard acceptedAny, generation == runtimeGeneration,
                   runtimeMode.acceptsSubmissions else { return }
             beginFlowIfNeeded()
         }
