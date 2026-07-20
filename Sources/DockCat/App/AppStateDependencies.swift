@@ -126,7 +126,7 @@ protocol SystemNotificationSourceEventBinding: AnyObject {
 
 @MainActor
 struct AppStateDependencies {
-    let settings: any DockCatSettingsProviding
+    let settings: SettingsStore
     let displayCatalog: DisplayCatalog
     let queue: any NotificationQueueing
     let catDriver: any CatVisualDriving
@@ -134,7 +134,7 @@ struct AppStateDependencies {
     let placementProvider: any DockPlacementProviding
     let calibrationPreview: any CalibrationPreviewing
     let presentation: PresentationSessionCoordinator
-    let systemAccess: any SystemNotificationSourceAccessing
+    let systemAccess: SystemNotificationAccessController
     let sourceEvents: (any SystemNotificationSourceEventBinding)?
     let systemPipeline: any SystemNotificationPipelineHandling
     let nativeBannerDismissal: any NativeBannerDismissalPerforming

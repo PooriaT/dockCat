@@ -43,9 +43,9 @@ final class AppState: ObservableObject {
         visualMode: .full,
         systemSourceRequested: false
     )
-    let settings: any DockCatSettingsProviding
+    let settings: SettingsStore
     let displayCatalog: DisplayCatalog
-    var systemNotificationAccess: any SystemNotificationSourceAccessing { systemAccess }
+    var systemNotificationAccess: SystemNotificationAccessController { systemAccess }
     private let queue: any NotificationQueueing
     private let systemNotificationPipeline: any SystemNotificationPipelineHandling
     private var machine = CatStateMachine()
@@ -54,7 +54,7 @@ final class AppState: ObservableObject {
     private let locator: any DockPlacementProviding
     private let calibrationPreview: any CalibrationPreviewing
     private let presentation: PresentationSessionCoordinator
-    private let systemAccess: any SystemNotificationSourceAccessing
+    private let systemAccess: SystemNotificationAccessController
     private let sourceEvents: (any SystemNotificationSourceEventBinding)?
     private let nativeBannerDismissalPerformer: any NativeBannerDismissalPerforming
     private var claimTask: Task<Void, Never>?
@@ -1550,7 +1550,7 @@ extension AppState {
         let options = settings.accessibilityDisplayOptions.options
         return .init(
             runtime: .init(lifecycleMode: runtimeSnapshot.mode.rawValue, catState: catState.rawValue, effectiveVisualMode: runtimeSnapshot.visualMode.rawValue, deliveryPaused: runtimeSnapshot.mode == .deliveryPaused, transitioning: runtimeSnapshot.mode.isTransitioning, recovering: isRecovering, runtimeGeneration: runtimeGeneration, currentQueueRevision: queueSnapshot.revision),
-            sources: .init(internalTestAvailable: true, urlSourceAvailable: true, systemSourceRequested: runtimeSnapshot.systemSourceRequested, systemSourceHealth: systemAccess.health.state.rawValue, systemSourceReason: systemAccess.health.reason?.rawValue, nativeBannerCloseRequested: settings.preferences.closeNativeBannersAfterCapture, exclusionBundleIdentifierCount: settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers.count),
+            sources: .init(internalTestAvailable: true, urlSourceAvailable: true, systemSourceRequested: runtimeSnapshot.systemSourceRequested, systemSourceHealth: systemAccess.health.state.rawValue, systemSourceReason: systemAccess.health.reason?.rawValue, nativeBannerCloseRequested: settings.preferences.closeOriginalBannerAfterCapture, exclusionBundleIdentifierCount: settings.preferences.nativeBannerDismissalExcludedBundleIdentifiers.count),
             queue: queueSnapshot.diagnosticInfo,
             presentation: .init(sessionExists: session != nil, sessionGeneration: session?.id.generation, phase: session?.phase.rawValue, contentRevision: session?.contentRevision, classification: session?.remainingTransientDuration == nil ? (session == nil ? nil : "persistent") : "transient", remainingTransientDurationSeconds: session?.remainingTransientDuration.map { max(0, Int(ceil(Double($0.components.seconds)))) }, dismissalCause: session?.dismissalCause?.rawValue, cancellationReason: session?.cancellationReason?.rawValue),
             placement: placementInfo,
