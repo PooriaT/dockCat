@@ -1,0 +1,19 @@
+{
+  "assetSetID": "dockcat.orange.v1",
+  "assetSetVersion": "1.0.0",
+  "atlasName": "DockCatCat",
+  "frameCount": 92,
+  "note": "Text-only frame catalog. Runtime PNG frames are generated locally with Scripts/export-cat-animation-assets.py and are intentionally not committed because binary files are not supported by the PR system.",
+  "clips": {
+    "sleep": { "frames": 10, "secondsPerFrame": 0.16, "playback": "loop" },
+    "wake": { "frames": 10, "secondsPerFrame": 0.08, "playback": "once" },
+    "pickUp": { "frames": 10, "secondsPerFrame": 0.08, "playback": "once" },
+    "turnToPresentation": { "frames": 8, "secondsPerFrame": 0.07, "playback": "once" },
+    "walkCarry": { "frames": 10, "secondsPerFrame": 0.08, "playback": "loop" },
+    "present": { "frames": 8, "secondsPerFrame": 0.08, "playback": "once" },
+    "wait": { "frames": 8, "secondsPerFrame": 0.18, "playback": "loop" },
+    "turnHome": { "frames": 8, "secondsPerFrame": 0.07, "playback": "once" },
+    "walkHome": { "frames": 10, "secondsPerFrame": 0.08, "playback": "loop" },
+    "settle": { "frames": 10, "secondsPerFrame": 0.10, "playback": "once" }
+  }
+}
