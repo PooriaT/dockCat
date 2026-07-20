@@ -5,8 +5,8 @@ import OSLog
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
-    let state = AppState(dependencies: .live())
     let diagnosticRecorder = DockCatDiagnosticEventRecorder()
+    lazy var state = AppState(dependencies: .live(diagnosticRecorder: diagnosticRecorder))
     lazy var settingsPresenter = SettingsWindowPresenter()
     lazy var menuBarVisibility = MenuBarVisibilityController(
         recoveryConfiguration: MenuBarRecoveryConfigurationVerifier(
@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     )
 
     private lazy var commandRouter = DockCatCommandRouter(
-        submitNotification: { [weak state] in state?.submit($0) },
+        submitNotification: { [weak self] in self?.state.submit($0) },
         restoreMenuBar: { [weak self] in self?.menuBarVisibility.restore() },
         presentSettings: { [weak self] source in self?.settingsPresenter.present(source: source) }
     )
