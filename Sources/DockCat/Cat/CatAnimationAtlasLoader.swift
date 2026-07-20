@@ -80,7 +80,7 @@ struct ProductionCatAnimationAssetLocator: CatAnimationAssetLocating {
         guard let url = bundle.url(forResource: "manifest", withExtension: "json", subdirectory: resourcePrefix) else { throw CocoaError(.fileNoSuchFile) }
         return try Data(contentsOf: url)
     }
-    func textureAtlas(named: String) throws -> SKTextureAtlas { SKTextureAtlas(named: "\(resourcePrefix)/\(named)", in: bundle) }
+    func textureAtlas(named: String) throws -> SKTextureAtlas { SKTextureAtlas(named: "\(resourcePrefix)/\(named)") }
     func sourceImageMetadata(for frameName: String, inAtlas atlasName: String) throws -> CatFrameImageMetadata {
         let subdirectory = "\(resourcePrefix)/\(atlasName).atlas"
         guard let url = bundle.url(forResource: frameName, withExtension: "png", subdirectory: subdirectory) ?? bundle.url(forResource: frameName, withExtension: nil, subdirectory: subdirectory) else { throw CocoaError(.fileNoSuchFile) }
